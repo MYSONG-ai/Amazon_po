@@ -1,4 +1,5 @@
 name: Vendor Central Daily Report
+# 每天北京时间10:00自动拉取销量和PO数据，发送飞书日报
 
 on:
   schedule:
