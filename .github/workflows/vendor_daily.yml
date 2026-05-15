@@ -1,0 +1,36 @@
+name: Vendor Central Daily Report
+
+on:
+  schedule:
+    - cron: '0 2 * * *'   # 北京时间每天 10:00
+  workflow_dispatch:
+
+jobs:
+  vendor-report:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Vendor Report
+        env:
+          SP_LWA_APP_ID: ${{ secrets.SP_LWA_APP_ID }}
+          SP_LWA_CLIENT_SECRET: ${{ secrets.SP_LWA_CLIENT_SECRET }}
+          SP_REFRESH_TOKEN: ${{ secrets.SP_REFRESH_TOKEN }}
+          SP_AWS_ACCESS_KEY: ${{ secrets.SP_AWS_ACCESS_KEY }}
+          SP_AWS_SECRET_KEY: ${{ secrets.SP_AWS_SECRET_KEY }}
+          SP_ROLE_ARN: ${{ secrets.SP_ROLE_ARN }}
+          SP_MARKETPLACE: DE
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          FEISHU_VENDOR_CHAT_ID: ${{ secrets.FEISHU_VENDOR_CHAT_ID }}
+        run: python vendor_report.py
