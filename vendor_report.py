@@ -240,6 +240,68 @@ def bitable_ensure(token: str) -> tuple[str, str]:
     return app_token, table_id
 
 
+def list_bitable_record_ids_by_date(
+    token: str, app_token: str, table_id: str, date_ts_ms: int
+) -> list[str]:
+    """Return record IDs whose 日期 field matches date_ts_ms (UTC midnight, ms).
+    Feishu stores DateTime as ms timestamps; we fetch all and filter in Python."""
+    base = (f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}"
+            f"/tables/{table_id}/records")
+    day_end_ms = date_ts_ms + 86400 * 1000
+    record_ids: list[str] = []
+    page_token = ""
+    while True:
+        params: dict = {"page_size": 100}
+        if page_token:
+            params["page_token"] = page_token
+        resp = requests.get(
+            base,
+            headers={"Authorization": f"Bearer {token}"},
+            params=params,
+            timeout=30,
+        ).json()
+        for item in resp.get("data", {}).get("items", []):
+            ts = item.get("fields", {}).get("日期")
+            if ts is not None and date_ts_ms <= int(ts) < day_end_ms:
+                record_ids.append(item["record_id"])
+        if not resp.get("data", {}).get("has_more"):
+            break
+        page_token = resp.get("data", {}).get("page_token", "")
+        if not page_token:
+            break
+    return record_ids
+
+
+def delete_bitable_records(
+    token: str, app_token: str, table_id: str, record_ids: list[str]
+) -> None:
+    url = (f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}"
+           f"/tables/{table_id}/records/batch_delete")
+    for i in range(0, len(record_ids), 500):
+        resp = _bitable_post(token, url, {"records": record_ids[i:i + 500]})
+        if resp.get("code") != 0:
+            logger.error("Bitable batch_delete failed: %s", resp)
+
+
+def replace_bitable_date(
+    date: datetime,
+    sales: FetchResult,
+    asin_names: dict[str, str],
+    feishu_app_id: str,
+    feishu_app_secret: str,
+) -> None:
+    token = feishu_token(feishu_app_id, feishu_app_secret)
+    app_token, table_id = bitable_ensure(token)
+    date_ts_ms = int(
+        date.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc).timestamp() * 1000
+    )
+    old_ids = list_bitable_record_ids_by_date(token, app_token, table_id, date_ts_ms)
+    if old_ids:
+        delete_bitable_records(token, app_token, table_id, old_ids)
+        logger.info("replace_bitable_date: deleted %d old records for %s", len(old_ids), date.strftime("%Y-%m-%d"))
+    write_to_bitable(sales, date, asin_names, feishu_app_id, feishu_app_secret)
+
+
 def write_to_bitable(
     sales: FetchResult,
     report_date: datetime,
@@ -408,6 +470,14 @@ REPORT_OPTIONS = {
     "sellingProgram": "RETAIL",
 }
 
+VENDOR_SALES_REPORT_TYPE = "GET_VENDOR_SALES_REPORT"
+VENDOR_SALES_OPTIONS = {
+    "reportPeriod": "DAY",
+    "distributorView": "MANUFACTURING",
+    "sellingProgram": "RETAIL",
+}
+UPGRADE_DAYS_AGO = int(os.environ.get("UPGRADE_DAYS_AGO", "4"))
+
 
 def fetch_sales_report(
     report_date: datetime,
@@ -446,6 +516,35 @@ def fetch_sales_report(
             report_id=report_id,
             status=status,
         )
+
+    rows = normalize_sales_report(payload)
+    return FetchResult(ok=True, rows=rows, report_id=report_id, status=status)
+
+
+def fetch_vendor_sales_report(
+    report_date: datetime,
+    credentials: dict[str, str],
+    marketplace: Any,
+) -> FetchResult:
+    start = report_date.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
+    end   = report_date.replace(hour=23, minute=59, second=59, microsecond=0, tzinfo=timezone.utc)
+
+    report_id = request_report(VENDOR_SALES_REPORT_TYPE, start, end, credentials, marketplace, VENDOR_SALES_OPTIONS)
+    if not report_id:
+        return FetchResult(ok=False, message=f"未能创建 {VENDOR_SALES_REPORT_TYPE}。")
+
+    doc_id, status = poll_report(report_id, credentials, marketplace)
+    if not doc_id:
+        message = (
+            f"{VENDOR_SALES_REPORT_TYPE} 返回 FATAL。"
+            if status == "FATAL"
+            else f"{VENDOR_SALES_REPORT_TYPE} 未完成，状态：{status}。"
+        )
+        return FetchResult(ok=False, message=message, report_id=report_id, status=status)
+
+    payload = download_report(doc_id, credentials, marketplace)
+    if payload is None:
+        return FetchResult(ok=False, message="销量报告下载失败。", report_id=report_id, status=status)
 
     rows = normalize_sales_report(payload)
     return FetchResult(ok=True, rows=rows, report_id=report_id, status=status)
@@ -665,6 +764,15 @@ def main():
             env["FEISHU_APP_ID"], env["FEISHU_APP_SECRET"], chat_id,
             f"📊 {date_str} 数据已更新，今日销量 {total} 台。",
         )
+
+    upgrade_date = datetime.now(CST) - timedelta(days=UPGRADE_DAYS_AGO)
+    logger.info("Upgrading %s with %s ...", upgrade_date.strftime("%Y-%m-%d"), VENDOR_SALES_REPORT_TYPE)
+    accurate = fetch_vendor_sales_report(upgrade_date, credentials, marketplace)
+    logger.info("Upgrade fetch: ok=%s rows=%s message=%s", accurate.ok, len(accurate.rows), accurate.message)
+    if accurate.ok and accurate.rows:
+        replace_bitable_date(upgrade_date, accurate, asin_names, env["FEISHU_APP_ID"], env["FEISHU_APP_SECRET"])
+    else:
+        logger.warning("Upgrade skipped for %s: %s", upgrade_date.strftime("%Y-%m-%d"), accurate.message)
 
     pos = fetch_po_list(PO_DAYS_BACK, credentials, marketplace)
     logger.info("PO result: ok=%s rows=%s message=%s", pos.ok, len(pos.rows), pos.message)
