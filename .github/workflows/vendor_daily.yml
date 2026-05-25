@@ -2,8 +2,6 @@ name: Vendor Central Daily Bitable
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 0 * * *'   # 北京时间 08:00 (UTC 00:00) 兜底
 
 jobs:
   vendor-report:
