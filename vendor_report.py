@@ -171,6 +171,21 @@ def send_feishu_post(app_id: str, app_secret: str, user_id: str, title: str, con
         )
 
 
+def send_feishu_text(app_id: str, app_secret: str, chat_id: str, text: str) -> None:
+    token = feishu_token(app_id, app_secret)
+    resp = requests.post(
+        "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json={"receive_id": chat_id, "msg_type": "text", "content": json.dumps({"text": text})},
+        timeout=30,
+    )
+    payload = resp.json()
+    if payload.get("code") != 0:
+        logger.error("Feishu text send failed: %s", payload)
+    else:
+        logger.info("Feishu text sent to chat_id=%s", chat_id)
+
+
 # ===================== Feishu Bitable =====================
 def _bitable_get(token: str, url: str) -> dict:
     return requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=30).json()
@@ -234,7 +249,7 @@ def write_to_bitable(
 ) -> None:
     if not sales.ok or not sales.rows:
         logger.info("Bitable write skipped: no sales data")
-        return
+        return False
 
     token = feishu_token(feishu_app_id, feishu_app_secret)
     app_token, table_id = bitable_ensure(token)
@@ -269,6 +284,7 @@ def write_to_bitable(
 
     url = (f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}"
            f"/tables/{table_id}/records/batch_create")
+    success = False
     for i in range(0, len(records), 500):
         batch = records[i:i + 500]
         resp = _bitable_post(token, url, {"records": batch})
@@ -276,6 +292,8 @@ def write_to_bitable(
             logger.error("Bitable write failed: %s", resp)
         else:
             logger.info("Bitable: wrote %d records for %s", len(batch), date_str)
+            success = True
+    return success
 
 
 # ===================== SP-API reports =====================
@@ -637,7 +655,16 @@ def main():
     sales = fetch_sales_report(report_date, credentials, marketplace)
     logger.info("Sales result: ok=%s rows=%s message=%s", sales.ok, len(sales.rows), sales.message)
 
-    write_to_bitable(sales, report_date, asin_names, env["FEISHU_APP_ID"], env["FEISHU_APP_SECRET"])
+    written = write_to_bitable(sales, report_date, asin_names, env["FEISHU_APP_ID"], env["FEISHU_APP_SECRET"])
+
+    chat_id = os.environ.get("FEISHU_VENDOR_CHAT_ID", "")
+    if written and chat_id:
+        total = sum(int(r.get("ordered_units") or 0) for r in sales.rows if int(r.get("ordered_units") or 0) > 0)
+        date_str = report_date.strftime("%Y-%m-%d")
+        send_feishu_text(
+            env["FEISHU_APP_ID"], env["FEISHU_APP_SECRET"], chat_id,
+            f"📊 {date_str} 数据已更新，今日销量 {total} 台。",
+        )
 
     pos = fetch_po_list(PO_DAYS_BACK, credentials, marketplace)
     logger.info("PO result: ok=%s rows=%s message=%s", pos.ok, len(pos.rows), pos.message)
