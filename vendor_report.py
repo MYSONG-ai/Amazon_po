@@ -525,9 +525,14 @@ def build_sales_update_text(date_str: str, rows: list[dict[str, Any]], asin_name
         if category:
             totals[category] += units
 
+    tv_total = total - totals["MONITOR"]
     lines = [f"📊 {date_str} 数据已更新，今日销量 {total} 台。"]
     for label, key in SALES_SUMMARY_CATEGORIES:
-        lines.append(f"* {label}：{totals[key]} 台")
+        if key == "MONITOR":
+            lines.append(f"• {label}：{totals[key]} 台")
+            continue
+        share = totals[key] / tv_total if tv_total else 0
+        lines.append(f"• {label}：{totals[key]} 台，占比 {share:.1%}")
     return "\n".join(lines)
 
 
