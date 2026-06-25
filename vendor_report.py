@@ -12,6 +12,7 @@ import gzip
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -464,6 +465,72 @@ def normalize_sales_report(payload: Any) -> list[dict[str, Any]]:
     return sorted(by_asin.values(), key=lambda r: r["ordered_units"], reverse=True)
 
 
+SALES_SUMMARY_CATEGORIES = (
+    ("F32", "F32"),
+    ("F65", "F65"),
+    ("Fpro 32", "FPRO32"),
+    ("Fpro 75", "FPRO75"),
+    ("FTV中尺寸", "FTV_MID"),
+    ("Mini LED", "MINI_LED"),
+    ("显示器", "MONITOR"),
+)
+
+
+def _clean_product_name(name: str) -> str:
+    return re.sub(r"[\s_-]+", "", name).upper()
+
+
+def classify_product(name: str) -> str | None:
+    clean_name = _clean_product_name(name)
+    if clean_name == "F32":
+        return "F32"
+    if clean_name == "F65":
+        return "F65"
+    if clean_name == "FPRO32":
+        return "FPRO32"
+    if clean_name == "FPRO75":
+        return "FPRO75"
+    if clean_name in {"F50", "F55", "FPRO50", "FPRO55"}:
+        return "FTV_MID"
+    if (
+        clean_name.startswith("FXMINILED")
+        or clean_name.startswith("SPROMINI")
+        or clean_name.startswith("SMINI")
+        or clean_name.startswith("NEWSMINI")
+    ):
+        return "MINI_LED"
+    if is_monitor_name(name):
+        return "MONITOR"
+    return None
+
+
+def is_monitor_name(name: str) -> bool:
+    normalized = " ".join(name.upper().split())
+    if not normalized.endswith(" 2026"):
+        return False
+    model = normalized[:-5].strip()
+    return model.endswith("I")
+
+
+def build_sales_update_text(date_str: str, rows: list[dict[str, Any]], asin_names: dict[str, str]) -> str:
+    total = sum(int(r.get("ordered_units") or 0) for r in rows if int(r.get("ordered_units") or 0) > 0)
+    totals = {key: 0 for _, key in SALES_SUMMARY_CATEGORIES}
+    for row in rows:
+        units = int(row.get("ordered_units") or 0)
+        if units <= 0:
+            continue
+        asin = row.get("asin", "")
+        name = asin_names.get(asin, asin)
+        category = classify_product(name)
+        if category:
+            totals[category] += units
+
+    lines = [f"📊 {date_str} 数据已更新，今日销量 {total} 台。"]
+    for label, key in SALES_SUMMARY_CATEGORIES:
+        lines.append(f"* {label}：{totals[key]} 台")
+    return "\n".join(lines)
+
+
 REPORT_TYPE = "GET_VENDOR_REAL_TIME_SALES_REPORT"
 REPORT_OPTIONS = {
     "distributorView": "MANUFACTURING",
@@ -758,11 +825,10 @@ def main():
 
     chat_id = os.environ.get("FEISHU_VENDOR_CHAT_ID", "")
     if written and chat_id:
-        total = sum(int(r.get("ordered_units") or 0) for r in sales.rows if int(r.get("ordered_units") or 0) > 0)
         date_str = report_date.strftime("%Y-%m-%d")
         send_feishu_text(
             env["FEISHU_APP_ID"], env["FEISHU_APP_SECRET"], chat_id,
-            f"📊 {date_str} 数据已更新，今日销量 {total} 台。",
+            build_sales_update_text(date_str, sales.rows, asin_names),
         )
 
     upgrade_date = datetime.now(CST) - timedelta(days=UPGRADE_DAYS_AGO)
