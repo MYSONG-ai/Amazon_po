@@ -32,5 +32,5 @@ jobs:
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           BITABLE_APP_TOKEN: ${{ secrets.BITABLE_APP_TOKEN }}
           BITABLE_TABLE_ID: ${{ secrets.BITABLE_TABLE_ID }}
-          FEISHU_VENDOR_CHAT_ID: oc_c95fca0100bedfff9cabf3c37e45d4cb
+          FEISHU_VENDOR_CHAT_ID: ${{ secrets.FEISHU_VENDOR_CHAT_ID }}
         run: python vendor_report.py
