@@ -3,8 +3,16 @@ name: Vendor Central Daily Inventory
 on:
   workflow_dispatch:
     inputs:
+      report_date:
+        description: 'Inventory report date in UTC, YYYY-MM-DD. Empty means latest available.'
+        required: false
+        default: ''
       debug_raw:
         description: 'Print raw Amazon inventory payload sample'
+        required: false
+        default: 'false'
+      log_rows:
+        description: 'Print normalized inventory row sample'
         required: false
         default: 'false'
       skip_write:
@@ -43,6 +51,8 @@ jobs:
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           INVENTORY_SPREADSHEET_TOKEN: ${{ secrets.INVENTORY_SPREADSHEET_TOKEN }}
           INVENTORY_SHEET_ID: ${{ secrets.INVENTORY_SHEET_ID }}
+          INVENTORY_REPORT_DATE: ${{ github.event.inputs.report_date }}
           INVENTORY_DEBUG_RAW: ${{ github.event.inputs.debug_raw == 'true' && '1' || '' }}
+          INVENTORY_LOG_ROWS: ${{ github.event.inputs.log_rows == 'true' && '1' || '' }}
           INVENTORY_SKIP_WRITE: ${{ github.event.inputs.skip_write == 'true' && '1' || '' }}
         run: python inventory_report.py

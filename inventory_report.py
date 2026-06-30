@@ -79,6 +79,19 @@ INVENTORY_HEADERS = [
 ]
 
 
+def inventory_report_date() -> datetime:
+    date_text = os.environ.get("INVENTORY_REPORT_DATE", "").strip()
+    if date_text:
+        try:
+            return datetime.strptime(date_text, "%Y-%m-%d")
+        except ValueError as exc:
+            raise SystemExit(
+                "INVENTORY_REPORT_DATE must use YYYY-MM-DD format, "
+                f"got {date_text!r}."
+            ) from exc
+    return datetime.now(CST) - timedelta(days=INVENTORY_DATA_DELAY_DAYS)
+
+
 def require_env() -> dict[str, str]:
     missing = [name for name in REQUIRED_ENV if not os.environ.get(name)]
     if missing:
@@ -282,6 +295,7 @@ def normalize_inventory_report(payload: Any) -> list[dict[str, Any]]:
         sku = str(_pick(item, "vendorSku", "vendorSKU", "sku", "SKU") or "").strip()
         sellable = _number(
             item,
+            "sellableOnHandInventoryUnits",
             "sellableOnHandUnits",
             "sellableInventoryUnits",
             "sellableUnits",
@@ -290,6 +304,7 @@ def normalize_inventory_report(payload: Any) -> list[dict[str, Any]]:
         )
         unsellable = _number(
             item,
+            "unsellableOnHandInventoryUnits",
             "unsellableOnHandUnits",
             "unsellableInventoryUnits",
             "unsellableUnits",
@@ -459,11 +474,37 @@ def write_inventory_to_sheet(
     return True
 
 
+def log_inventory_rows_sample(
+    inventory: FetchResult,
+    report_date: datetime,
+    marketplace_name: str,
+    asin_names: dict[str, str],
+) -> None:
+    if not os.environ.get("INVENTORY_LOG_ROWS"):
+        return
+    logger.info("Inventory row sample for %s:", report_date.strftime("%Y-%m-%d"))
+    for row in inventory.rows[:30]:
+        asin = row.get("asin", "")
+        logger.info(
+            "inventory_row marketplace=%s name=%s asin=%s sellable=%s unsellable=%s "
+            "incoming=%s total=%s value=%s currency=%s",
+            marketplace_name,
+            asin_names.get(asin, asin),
+            asin,
+            row.get("sellable", 0),
+            row.get("unsellable", 0),
+            row.get("incoming", 0),
+            row.get("total", 0),
+            row.get("inventory_value", 0),
+            row.get("currency", ""),
+        )
+
+
 def main() -> None:
     env = require_env()
     marketplace, marketplace_name = marketplace_config()
     credentials = sp_credentials(env)
-    report_date = datetime.now(CST) - timedelta(days=INVENTORY_DATA_DELAY_DAYS)
+    report_date = inventory_report_date()
     xlsx_path = os.environ.get(
         "ASIN_NAMES_XLSX",
         os.path.join(os.path.dirname(__file__), "Xiaomi电视产品价格表2025-2026.xlsx"),
@@ -488,6 +529,13 @@ def main() -> None:
         distributor_view,
         inventory.message,
     )
+    if inventory.ok:
+        log_inventory_rows_sample(
+            inventory,
+            selected_date,
+            marketplace_name,
+            asin_names,
+        )
     if os.environ.get("INVENTORY_SKIP_WRITE"):
         logger.info("Inventory spreadsheet write skipped by INVENTORY_SKIP_WRITE.")
         return
