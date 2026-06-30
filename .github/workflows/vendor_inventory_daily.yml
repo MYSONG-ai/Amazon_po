@@ -32,6 +32,5 @@ jobs:
           SP_MARKETPLACE: DE
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
-          INVENTORY_BITABLE_APP_TOKEN: ${{ secrets.INVENTORY_BITABLE_APP_TOKEN }}
-          INVENTORY_BITABLE_TABLE_ID: ${{ secrets.INVENTORY_BITABLE_TABLE_ID }}
+          INVENTORY_SPREADSHEET_TOKEN: ${{ secrets.INVENTORY_SPREADSHEET_TOKEN }}
         run: python inventory_report.py

@@ -2,7 +2,8 @@
 Amazon Vendor Central daily inventory report.
 
 Pulls the Vendor Inventory report with SP-API and writes rows to a dedicated
-Feishu Bitable. This job intentionally does not send Feishu chat messages.
+Feishu Sheets spreadsheet. This job intentionally does not send Feishu chat
+messages.
 """
 
 from __future__ import annotations
@@ -54,19 +55,19 @@ INVENTORY_OPTIONS = {
 }
 INVENTORY_DATA_DELAY_DAYS = int(os.environ.get("INVENTORY_DATA_DELAY_DAYS", "1"))
 
-INVENTORY_BITABLE_FIELDS = [
-    ("日期", 1),
-    ("站点", 1),
-    ("产品名", 1),
-    ("ASIN", 1),
-    ("SKU", 1),
-    ("可售库存", 2),
-    ("不可售库存", 2),
-    ("采购中/在途库存", 2),
-    ("总库存", 2),
-    ("库存金额", 2),
-    ("币种", 1),
-    ("报告ID", 1),
+INVENTORY_HEADERS = [
+    "日期",
+    "站点",
+    "产品名",
+    "ASIN",
+    "SKU",
+    "可售库存",
+    "不可售库存",
+    "采购中/在途库存",
+    "总库存",
+    "库存金额",
+    "币种",
+    "报告ID",
 ]
 
 
@@ -80,11 +81,11 @@ def require_env() -> dict[str, str]:
     return {name: os.environ[name] for name in REQUIRED_ENV}
 
 
-def _bitable_get(token: str, url: str) -> dict:
+def _feishu_get(token: str, url: str) -> dict:
     return requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=30).json()
 
 
-def _bitable_post(token: str, url: str, body: dict) -> dict:
+def _feishu_post(token: str, url: str, body: dict) -> dict:
     return requests.post(
         url,
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
@@ -93,56 +94,108 @@ def _bitable_post(token: str, url: str, body: dict) -> dict:
     ).json()
 
 
-def inventory_bitable_ensure(token: str) -> tuple[str, str]:
-    app_token = os.environ.get("INVENTORY_BITABLE_APP_TOKEN", "")
-    table_id = os.environ.get("INVENTORY_BITABLE_TABLE_ID", "")
-    if app_token and table_id:
-        return app_token, table_id
-    if os.environ.get("GITHUB_EVENT_NAME") == "schedule":
-        raise RuntimeError(
-            "INVENTORY_BITABLE_APP_TOKEN and INVENTORY_BITABLE_TABLE_ID are not set. "
-            "Run this workflow manually once to create the inventory Bitable, then add "
-            "the printed token values to GitHub Secrets before enabling daily writes."
-        )
+def _sheets_put_values(
+    token: str,
+    spreadsheet_token: str,
+    sheet_id: str,
+    start_cell: str,
+    values: list[list[Any]],
+) -> None:
+    if not values:
+        return
+    end_col = _column_letter(len(values[0]))
+    end_row = _cell_row(start_cell) + len(values) - 1
+    value_range = {
+        "range": f"{sheet_id}!{start_cell}:{end_col}{end_row}",
+        "values": values,
+    }
+    resp = requests.put(
+        f"https://open.feishu.cn/open-apis/sheets/v2/spreadsheets/{spreadsheet_token}/values",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json={"valueRange": value_range},
+        timeout=30,
+    ).json()
+    if resp.get("code") != 0:
+        raise RuntimeError(f"Feishu Sheets values write failed: {resp}")
 
-    resp = _bitable_post(
+
+def _sheets_append_values(
+    token: str,
+    spreadsheet_token: str,
+    sheet_id: str,
+    values: list[list[Any]],
+) -> None:
+    if not values:
+        return
+    end_col = _column_letter(len(values[0]))
+    resp = requests.post(
+        f"https://open.feishu.cn/open-apis/sheets/v2/spreadsheets/{spreadsheet_token}/values_append",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json={"valueRange": {"range": f"{sheet_id}!A1:{end_col}1", "values": values}},
+        timeout=30,
+    ).json()
+    if resp.get("code") != 0:
+        raise RuntimeError(f"Feishu Sheets values append failed: {resp}")
+
+
+def _column_letter(column_count: int) -> str:
+    result = ""
+    n = column_count
+    while n:
+        n, remainder = divmod(n - 1, 26)
+        result = chr(65 + remainder) + result
+    return result or "A"
+
+
+def _cell_row(cell: str) -> int:
+    digits = "".join(ch for ch in cell if ch.isdigit())
+    return int(digits or "1")
+
+
+def _first_sheet_id(token: str, spreadsheet_token: str) -> str:
+    resp = _feishu_get(
         token,
-        "https://open.feishu.cn/open-apis/bitable/v1/apps",
-        {"name": "Vendor Central 库存日报"},
+        f"https://open.feishu.cn/open-apis/sheets/v3/spreadsheets/{spreadsheet_token}/sheets/query",
     )
     if resp.get("code") != 0:
-        raise RuntimeError(f"Create inventory bitable failed: {resp}")
-    app_token = resp["data"]["app"]["app_token"]
+        raise RuntimeError(f"Feishu Sheets metadata query failed: {resp}")
+    sheets = resp.get("data", {}).get("sheets", [])
+    if not sheets:
+        raise RuntimeError(f"Feishu Sheets metadata has no sheets: {resp}")
+    return sheets[0]["sheet_id"]
 
-    resp2 = _bitable_get(
-        token,
-        f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables",
-    )
-    table_id = resp2["data"]["items"][0]["table_id"]
 
-    existing_resp = _bitable_get(
-        token,
-        f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/fields",
-    )
-    existing = {f["field_name"] for f in existing_resp.get("data", {}).get("items", [])}
-    for field_name, field_type in INVENTORY_BITABLE_FIELDS:
-        if field_name in existing:
-            continue
-        _bitable_post(
-            token,
-            f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/fields",
-            {"field_name": field_name, "type": field_type},
+def inventory_spreadsheet_ensure(token: str) -> tuple[str, str]:
+    spreadsheet_token = os.environ.get("INVENTORY_SPREADSHEET_TOKEN", "")
+    if spreadsheet_token:
+        return spreadsheet_token, _first_sheet_id(token, spreadsheet_token)
+    if os.environ.get("GITHUB_EVENT_NAME") == "schedule":
+        raise RuntimeError(
+            "INVENTORY_SPREADSHEET_TOKEN is not set. Run this workflow manually once "
+            "to create the inventory spreadsheet, then add the printed token value to "
+            "GitHub Secrets before enabling daily writes."
         )
 
-    logger.info("Inventory Bitable created: https://www.feishu.cn/base/%s", app_token)
-    logger.info(
-        "Add these to GitHub Secrets to reuse the same table on future runs:\n"
-        "  INVENTORY_BITABLE_APP_TOKEN=%s\n"
-        "  INVENTORY_BITABLE_TABLE_ID=%s",
-        app_token,
-        table_id,
+    resp = _feishu_post(
+        token,
+        "https://open.feishu.cn/open-apis/sheets/v3/spreadsheets",
+        {"title": "Vendor Central 库存日报"},
     )
-    return app_token, table_id
+    if resp.get("code") != 0:
+        raise RuntimeError(f"Create inventory spreadsheet failed: {resp}")
+    spreadsheet = resp.get("data", {}).get("spreadsheet", {})
+    spreadsheet_token = spreadsheet.get("spreadsheet_token")
+    if not spreadsheet_token:
+        raise RuntimeError(f"Create inventory spreadsheet returned no token: {resp}")
+    sheet_id = _first_sheet_id(token, spreadsheet_token)
+    _sheets_put_values(token, spreadsheet_token, sheet_id, "A1", [INVENTORY_HEADERS])
+    logger.info("Inventory spreadsheet created: %s", spreadsheet.get("url", ""))
+    logger.info(
+        "Add this to GitHub Secrets to reuse the same spreadsheet on future runs:\n"
+        "  INVENTORY_SPREADSHEET_TOKEN=%s",
+        spreadsheet_token,
+    )
+    return spreadsheet_token, sheet_id
 
 
 def _report_records(payload: Any) -> list[dict[str, Any]]:
@@ -279,7 +332,7 @@ def fetch_inventory_report(
     return FetchResult(ok=True, rows=rows, report_id=report_id, status=status)
 
 
-def write_inventory_to_bitable(
+def write_inventory_to_sheet(
     inventory: FetchResult,
     report_date: datetime,
     marketplace_name: str,
@@ -290,47 +343,37 @@ def write_inventory_to_bitable(
     if not inventory.ok:
         raise RuntimeError(inventory.message)
     if not inventory.rows:
-        logger.info("Inventory Bitable write skipped: no inventory data")
+        logger.info("Inventory spreadsheet write skipped: no inventory data")
         return False
 
     token = feishu_token(feishu_app_id, feishu_app_secret)
-    app_token, table_id = inventory_bitable_ensure(token)
+    spreadsheet_token, sheet_id = inventory_spreadsheet_ensure(token)
     date_str = report_date.strftime("%Y-%m-%d")
-    records = []
+    values = []
     for row in inventory.rows:
         asin = row.get("asin", "")
-        records.append(
-            {
-                "fields": {
-                    "日期": date_str,
-                    "站点": marketplace_name,
-                    "产品名": asin_names.get(asin, asin),
-                    "ASIN": asin,
-                    "SKU": row.get("sku", ""),
-                    "可售库存": row.get("sellable", 0),
-                    "不可售库存": row.get("unsellable", 0),
-                    "采购中/在途库存": row.get("incoming", 0),
-                    "总库存": row.get("total", 0),
-                    "库存金额": row.get("inventory_value", 0),
-                    "币种": row.get("currency", ""),
-                    "报告ID": inventory.report_id or "",
-                }
-            }
+        values.append(
+            [
+                date_str,
+                marketplace_name,
+                asin_names.get(asin, asin),
+                asin,
+                row.get("sku", ""),
+                row.get("sellable", 0),
+                row.get("unsellable", 0),
+                row.get("incoming", 0),
+                row.get("total", 0),
+                row.get("inventory_value", 0),
+                row.get("currency", ""),
+                inventory.report_id or "",
+            ]
         )
 
-    url = (
-        f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}"
-        f"/tables/{table_id}/records/batch_create"
-    )
-    success = False
-    for i in range(0, len(records), 500):
-        batch = records[i:i + 500]
-        resp = _bitable_post(token, url, {"records": batch})
-        if resp.get("code") != 0:
-            raise RuntimeError(f"Inventory Bitable write failed: {resp}")
-        logger.info("Inventory Bitable: wrote %d records for %s", len(batch), date_str)
-        success = True
-    return success
+    for i in range(0, len(values), 500):
+        batch = values[i:i + 500]
+        _sheets_append_values(token, spreadsheet_token, sheet_id, batch)
+        logger.info("Inventory spreadsheet: wrote %d rows for %s", len(batch), date_str)
+    return True
 
 
 def main() -> None:
@@ -357,7 +400,7 @@ def main() -> None:
         len(inventory.rows),
         inventory.message,
     )
-    write_inventory_to_bitable(
+    write_inventory_to_sheet(
         inventory,
         report_date,
         marketplace_name,
