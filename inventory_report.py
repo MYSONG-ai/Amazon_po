@@ -301,11 +301,10 @@ def normalize_inventory_report(payload: Any) -> list[dict[str, Any]]:
             "inTransitQuantity",
             "inTransitUnits",
         )
-        total = _number(item, "totalInventoryUnits", "totalUnits", "onHandUnits")
-        if not total:
-            total = sellable + unsellable + incoming
+        total = sellable + unsellable
         value, currency = _money(
             item,
+            "sellableOnHandInventoryCost",
             "sellableOnHandInventory",
             "sellableInventory",
             "inventoryValue",
