@@ -236,10 +236,18 @@ def log_inventory_payload_sample(payload: Any) -> None:
     records = _report_records(payload)
     logger.info("Inventory raw payload record count: %d", len(records))
     for index, record in enumerate(records[:5], start=1):
+        if isinstance(record, dict):
+            field_types = {
+                key: type(value).__name__
+                for key, value in sorted(record.items())
+            }
+            logger.info("Inventory raw record %d fields: %s", index, sorted(record.keys()))
+            logger.info("Inventory raw record %d field types: %s", index, field_types)
+            continue
         logger.info(
-            "Inventory raw record %d: %s",
+            "Inventory raw record %d type: %s",
             index,
-            json.dumps(record, ensure_ascii=False, sort_keys=True),
+            type(record).__name__,
         )
 
 
