@@ -33,4 +33,5 @@ jobs:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           INVENTORY_SPREADSHEET_TOKEN: ${{ secrets.INVENTORY_SPREADSHEET_TOKEN }}
+          INVENTORY_SHEET_ID: ${{ secrets.INVENTORY_SHEET_ID }}
         run: python inventory_report.py

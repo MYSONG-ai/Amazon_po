@@ -176,8 +176,9 @@ def _first_sheet_id(token: str, spreadsheet_token: str) -> str:
 
 def inventory_spreadsheet_ensure(token: str) -> tuple[str, str]:
     spreadsheet_token = os.environ.get("INVENTORY_SPREADSHEET_TOKEN", "")
+    sheet_id = os.environ.get("INVENTORY_SHEET_ID", "")
     if spreadsheet_token:
-        return spreadsheet_token, _first_sheet_id(token, spreadsheet_token)
+        return spreadsheet_token, sheet_id or _first_sheet_id(token, spreadsheet_token)
     if os.environ.get("GITHUB_EVENT_NAME") == "schedule":
         raise RuntimeError(
             "INVENTORY_SPREADSHEET_TOKEN is not set. Run this workflow manually once "
