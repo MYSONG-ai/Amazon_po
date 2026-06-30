@@ -2,6 +2,15 @@ name: Vendor Central Daily Inventory
 
 on:
   workflow_dispatch:
+    inputs:
+      debug_raw:
+        description: 'Print raw Amazon inventory payload sample'
+        required: false
+        default: 'false'
+      skip_write:
+        description: 'Skip writing rows to Feishu spreadsheet'
+        required: false
+        default: 'false'
   schedule:
     - cron: '0 2 * * *'
 
@@ -34,4 +43,6 @@ jobs:
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           INVENTORY_SPREADSHEET_TOKEN: ${{ secrets.INVENTORY_SPREADSHEET_TOKEN }}
           INVENTORY_SHEET_ID: ${{ secrets.INVENTORY_SHEET_ID }}
+          INVENTORY_DEBUG_RAW: ${{ github.event.inputs.debug_raw == 'true' && '1' || '' }}
+          INVENTORY_SKIP_WRITE: ${{ github.event.inputs.skip_write == 'true' && '1' || '' }}
         run: python inventory_report.py

@@ -226,6 +226,23 @@ def _report_records(payload: Any) -> list[dict[str, Any]]:
     return []
 
 
+def log_inventory_payload_sample(payload: Any) -> None:
+    if not os.environ.get("INVENTORY_DEBUG_RAW"):
+        return
+    if isinstance(payload, dict):
+        logger.info("Inventory raw payload top-level keys: %s", sorted(payload.keys()))
+    else:
+        logger.info("Inventory raw payload type: %s", type(payload).__name__)
+    records = _report_records(payload)
+    logger.info("Inventory raw payload record count: %d", len(records))
+    for index, record in enumerate(records[:5], start=1):
+        logger.info(
+            "Inventory raw record %d: %s",
+            index,
+            json.dumps(record, ensure_ascii=False, sort_keys=True),
+        )
+
+
 def _pick(item: dict[str, Any], *names: str) -> Any:
     for name in names:
         if name in item and item[name] not in (None, ""):
@@ -347,6 +364,7 @@ def fetch_inventory_report(
             status=status,
         )
 
+    log_inventory_payload_sample(payload)
     rows = normalize_inventory_report(payload)
     return FetchResult(ok=True, rows=rows, report_id=report_id, status=status)
 
@@ -463,6 +481,9 @@ def main() -> None:
         distributor_view,
         inventory.message,
     )
+    if os.environ.get("INVENTORY_SKIP_WRITE"):
+        logger.info("Inventory spreadsheet write skipped by INVENTORY_SKIP_WRITE.")
+        return
     write_inventory_to_sheet(
         inventory,
         selected_date,
