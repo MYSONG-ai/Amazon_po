@@ -54,6 +54,14 @@ INVENTORY_OPTIONS = {
     "sellingProgram": "RETAIL",
 }
 INVENTORY_DATA_DELAY_DAYS = int(os.environ.get("INVENTORY_DATA_DELAY_DAYS", "1"))
+INVENTORY_MAX_DAYS_BACK = int(os.environ.get("INVENTORY_MAX_DAYS_BACK", "7"))
+INVENTORY_DISTRIBUTOR_VIEWS = tuple(
+    value.strip().upper()
+    for value in os.environ.get(
+        "INVENTORY_DISTRIBUTOR_VIEWS", "MANUFACTURING,SOURCING"
+    ).split(",")
+    if value.strip()
+)
 
 INVENTORY_HEADERS = [
     "日期",
@@ -295,9 +303,12 @@ def fetch_inventory_report(
     report_date: datetime,
     credentials: dict[str, str],
     marketplace: Any,
+    distributor_view: str,
 ) -> FetchResult:
     start = report_date.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
     end = report_date.replace(hour=23, minute=59, second=59, microsecond=0, tzinfo=timezone.utc)
+    report_options = dict(INVENTORY_OPTIONS)
+    report_options["distributorView"] = distributor_view
 
     report_id = request_report(
         INVENTORY_REPORT_TYPE,
@@ -305,16 +316,22 @@ def fetch_inventory_report(
         end,
         credentials,
         marketplace,
-        INVENTORY_OPTIONS,
+        report_options,
     )
     if not report_id:
-        return FetchResult(ok=False, message=f"Unable to create {INVENTORY_REPORT_TYPE}.")
+        return FetchResult(
+            ok=False,
+            message=f"Unable to create {INVENTORY_REPORT_TYPE} ({distributor_view}).",
+        )
 
     doc_id, status = poll_report(report_id, credentials, marketplace)
     if not doc_id:
         return FetchResult(
             ok=False,
-            message=f"{INVENTORY_REPORT_TYPE} not ready, status={status}.",
+            message=(
+                f"{INVENTORY_REPORT_TYPE} {report_date.strftime('%Y-%m-%d')} "
+                f"{distributor_view} status={status}."
+            ),
             report_id=report_id,
             status=status,
         )
@@ -330,6 +347,45 @@ def fetch_inventory_report(
 
     rows = normalize_inventory_report(payload)
     return FetchResult(ok=True, rows=rows, report_id=report_id, status=status)
+
+
+def fetch_first_available_inventory_report(
+    start_date: datetime,
+    credentials: dict[str, str],
+    marketplace: Any,
+) -> tuple[FetchResult, datetime, str]:
+    failures: list[str] = []
+    for days_offset in range(INVENTORY_MAX_DAYS_BACK):
+        report_date = start_date - timedelta(days=days_offset)
+        for distributor_view in INVENTORY_DISTRIBUTOR_VIEWS:
+            logger.info(
+                "Trying inventory report: date=%s distributorView=%s",
+                report_date.strftime("%Y-%m-%d"),
+                distributor_view,
+            )
+            result = fetch_inventory_report(
+                report_date,
+                credentials,
+                marketplace,
+                distributor_view,
+            )
+            if result.ok:
+                logger.info(
+                    "Inventory report selected: date=%s distributorView=%s rows=%s",
+                    report_date.strftime("%Y-%m-%d"),
+                    distributor_view,
+                    len(result.rows),
+                )
+                return result, report_date, distributor_view
+            failures.append(result.message)
+    return (
+        FetchResult(
+            ok=False,
+            message="No available inventory report. Tried: " + " | ".join(failures),
+        ),
+        start_date,
+        "",
+    )
 
 
 def write_inventory_to_sheet(
@@ -393,16 +449,21 @@ def main() -> None:
         report_date.strftime("%Y-%m-%d"),
         github_run_label(),
     )
-    inventory = fetch_inventory_report(report_date, credentials, marketplace)
+    inventory, selected_date, distributor_view = fetch_first_available_inventory_report(
+        report_date,
+        credentials,
+        marketplace,
+    )
     logger.info(
-        "Inventory result: ok=%s rows=%s message=%s",
+        "Inventory result: ok=%s rows=%s distributorView=%s message=%s",
         inventory.ok,
         len(inventory.rows),
+        distributor_view,
         inventory.message,
     )
     write_inventory_to_sheet(
         inventory,
-        report_date,
+        selected_date,
         marketplace_name,
         asin_names,
         env["FEISHU_APP_ID"],
