@@ -136,10 +136,11 @@ def _sheets_append_values(
     if not values:
         return
     end_col = _column_letter(len(values[0]))
+    end_row = len(values)
     resp = requests.post(
         f"https://open.feishu.cn/open-apis/sheets/v2/spreadsheets/{spreadsheet_token}/values_append",
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        json={"valueRange": {"range": f"{sheet_id}!A1:{end_col}1", "values": values}},
+        json={"valueRange": {"range": f"{sheet_id}!A1:{end_col}{end_row}", "values": values}},
         timeout=30,
     ).json()
     if resp.get("code") != 0:
