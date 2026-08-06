@@ -1,7 +1,7 @@
 """
 Daily monitor for new unconfirmed Amazon Vendor Central Italy POs.
 
-The job checks two Italy VC accounts and sends a Feishu group message only when
+The job checks one Italy VC account and sends a Feishu group message only when
 new unconfirmed purchase orders are found.
 """
 
@@ -33,7 +33,7 @@ CHAT_ID = os.environ.get(
 )
 ACCOUNT_SLOTS = tuple(
     slot.strip().upper()
-    for slot in os.environ.get("UNCONFIRMED_PO_ACCOUNT_SLOTS", "IT1,IT2").split(",")
+    for slot in os.environ.get("UNCONFIRMED_PO_ACCOUNT_SLOTS", "IT").split(",")
     if slot.strip()
 )
 UNCONFIRMED_STATES = {
