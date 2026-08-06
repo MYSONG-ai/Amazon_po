@@ -1,13 +1,12 @@
 # Italy Unconfirmed PO Monitor
 
-This job checks one Italy Vendor Central account every day and sends a Feishu
-group message only when new unconfirmed POs are found.
+This job checks one Italy Vendor Central account and sends a Feishu group
+message only when unconfirmed POs are found.
 
 Workflow:
 
 - `.github/workflows/vendor_it_unconfirmed_po_daily.yml`
-- Schedule: every day at 09:00 China time
-- Manual run input: `days_back`, default `1`
+- Trigger: external scheduler or manual `workflow_dispatch`
 - Feishu chat: `oc_c95fca0100bedfff9cabf3c37e45d4cb`
 - RMB conversion: GitHub variable `EUR_TO_RMB_RATE`, default `7.8`
 

@@ -1,8 +1,8 @@
 """
-Daily monitor for new unconfirmed Amazon Vendor Central Italy POs.
+Monitor for all unconfirmed Amazon Vendor Central Italy POs.
 
 The job checks one Italy VC account and sends a Feishu group message only when
-new unconfirmed purchase orders are found.
+unconfirmed purchase orders are found.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Any
 
 from sp_api.api import VendorOrders
@@ -42,7 +42,6 @@ UNCONFIRMED_STATES = {
     ).split(",")
     if state.strip()
 }
-DAYS_BACK = max(1, min(int(os.environ.get("UNCONFIRMED_PO_DAYS_BACK", "1")), 7))
 EUR_TO_RMB_RATE = float(os.environ.get("EUR_TO_RMB_RATE", "7.8"))
 
 COMMON_SP_ENV = (
@@ -203,24 +202,18 @@ def summarize_po(order: dict[str, Any], account: AccountConfig) -> dict[str, Any
 def fetch_unconfirmed_pos(account: AccountConfig) -> list[dict[str, Any]]:
     marketplace = MARKETPLACE_MAP[account.marketplace_code]
     api = VendorOrders(credentials=account.credentials, marketplace=marketplace)
-    now = datetime.now(timezone.utc)
-    created_after = (now - timedelta(days=DAYS_BACK)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    created_before = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     logger.info(
-        "Checking %s (%s): %s to %s",
+        "Checking %s (%s): all unconfirmed purchase orders",
         account.label,
         account.marketplace_code,
-        created_after,
-        created_before,
     )
 
     rows: list[dict[str, Any]] = []
     next_token = None
     while True:
         kwargs: dict[str, Any] = {
-            "createdAfter": created_after,
-            "createdBefore": created_before,
+            "purchaseOrderState": "New",
             "sortOrder": "DESC",
             "limit": 100,
         }
@@ -249,7 +242,7 @@ def build_message(rows: list[dict[str, Any]]) -> str:
     currency = next((row.get("currency") for row in rows if row.get("currency")), "EUR")
     total_amount = sum(float(row.get("total_net") or 0) for row in rows)
     lines = [
-        "📌 VC 后台有新的 unconfirmed PO，请及时查看",
+        "📌 VC 后台有 unconfirmed PO，请及时查看",
         f"更新时间：{now_str}",
         f"数量：{len(rows)} 个",
         "",
@@ -314,7 +307,7 @@ def main() -> None:
         raise SystemExit(1)
 
     if not all_rows:
-        logger.info("No new unconfirmed PO found. No Feishu message sent.")
+        logger.info("No unconfirmed PO found. No Feishu message sent.")
         return
 
     send_feishu_text(app_id, app_secret, CHAT_ID, build_message(all_rows))

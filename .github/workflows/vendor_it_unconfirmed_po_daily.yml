@@ -1,12 +1,7 @@
 name: Vendor Italy Unconfirmed PO Daily
 
 on:
-  workflow_dispatch:
-    inputs:
-      days_back:
-        description: 'Created time window in days, 1-7'
-        required: false
-        default: '1'
+  workflow_dispatch: {}
 
 jobs:
   unconfirmed-po:
@@ -29,7 +24,6 @@ jobs:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           UNCONFIRMED_PO_CHAT_ID: oc_c95fca0100bedfff9cabf3c37e45d4cb
-          UNCONFIRMED_PO_DAYS_BACK: ${{ github.event.inputs.days_back || '1' }}
           UNCONFIRMED_PO_ACCOUNT_SLOTS: IT
           EUR_TO_RMB_RATE: ${{ vars.EUR_TO_RMB_RATE || '7.8' }}
 
