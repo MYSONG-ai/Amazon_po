@@ -7,8 +7,6 @@ on:
         description: 'Created time window in days, 1-7'
         required: false
         default: '1'
-  schedule:
-    - cron: '0 1 * * *'
 
 jobs:
   unconfirmed-po:
