@@ -135,25 +135,13 @@ def _format_rmb(value: float) -> str:
     return f"RMB {_format_number(value)}"
 
 
-def _month_day(value: str) -> str:
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return f"{parsed.month}/{parsed.day}"
-    except Exception:
-        return value[:10] if value else ""
+def _format_w(value: float) -> str:
+    text = f"{value / 10000:.1f}".rstrip("0").rstrip(".")
+    return f"{text}W"
 
 
-def _format_ship_window(value: Any) -> str:
-    if not value:
-        return ""
-    if isinstance(value, dict):
-        start = value.get("start") or value.get("startDate") or value.get("startDateTime") or ""
-        end = value.get("end") or value.get("endDate") or value.get("endDateTime") or ""
-        if start and end:
-            return f"SW {_month_day(str(start))} -{_month_day(str(end))}"
-        if start:
-            return f"SW {_month_day(str(start))}"
-    return f"SW {value}"
+def _format_rmb_w(value: float) -> str:
+    return f"RMB {_format_w(value)}"
 
 
 def summarize_po(order: dict[str, Any], account: AccountConfig) -> dict[str, Any]:
@@ -227,7 +215,7 @@ def build_message(rows: list[dict[str, Any]]) -> str:
     currency = next((row.get("currency") for row in rows if row.get("currency")), "EUR")
     total_amount = sum(float(row.get("total_net") or 0) for row in rows)
     lines = [
-        f"📌 VC 后台有新的 unconfirmed PO（近 {DAYS_BACK} 天），请及时查看",
+        "📌 VC 后台有新的 unconfirmed PO，请及时查看",
         f"更新时间：{now_str}",
         f"数量：{len(rows)} 个",
         "",
@@ -244,22 +232,21 @@ def build_message(rows: list[dict[str, Any]]) -> str:
             if shown >= 30:
                 continue
             amount = _format_money(row.get("currency") or currency, float(row.get("total_net") or 0))
-            ship = _format_ship_window(row.get("ship_window"))
-            ship_part = f"，{ship}" if ship else ""
             lines.append(
-                "- "
+                "  - "
                 f"{row['po_number']}，"
                 f"{row['sku_count']} SKU，{row['total_qty']} 件"
-                f"{ship_part}，金额 {amount}"
+                f"，金额 {amount}"
             )
             shown += 1
+        lines.append("")
 
-    lines.append("")
     if shown < len(rows):
         lines.append(f"其余 {len(rows) - shown} 个 PO 未展开")
         lines.append("")
     lines.append(
-        f"总金额 {_format_money(currency, total_amount)}，{_format_rmb(total_amount * EUR_TO_RMB_RATE)}"
+        f"总金额 {currency or 'EUR'} {_format_w(total_amount)}，"
+        f"{_format_rmb_w(total_amount * EUR_TO_RMB_RATE)}"
     )
     return "\n".join(lines)
 
