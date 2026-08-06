@@ -19,7 +19,6 @@ from sp_api.base import SellingApiException
 from vendor_report import (
     CST,
     MARKETPLACE_MAP,
-    github_run_label,
     money_amount,
     money_currency,
     send_feishu_text,
@@ -44,6 +43,7 @@ UNCONFIRMED_STATES = {
     if state.strip()
 }
 DAYS_BACK = max(1, min(int(os.environ.get("UNCONFIRMED_PO_DAYS_BACK", "1")), 7))
+EUR_TO_RMB_RATE = float(os.environ.get("EUR_TO_RMB_RATE", "7.8"))
 
 COMMON_SP_ENV = (
     "SP_LWA_APP_ID",
@@ -122,6 +122,40 @@ def _po_amount(item: dict[str, Any]) -> float:
     return quantity * money_amount(item.get("netCost"))
 
 
+def _format_number(value: float) -> str:
+    text = f"{value:,.2f}".rstrip("0").rstrip(".")
+    return text
+
+
+def _format_money(currency: str, value: float) -> str:
+    return f"{currency or 'EUR'} {_format_number(value)}"
+
+
+def _format_rmb(value: float) -> str:
+    return f"RMB {_format_number(value)}"
+
+
+def _month_day(value: str) -> str:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return f"{parsed.month}/{parsed.day}"
+    except Exception:
+        return value[:10] if value else ""
+
+
+def _format_ship_window(value: Any) -> str:
+    if not value:
+        return ""
+    if isinstance(value, dict):
+        start = value.get("start") or value.get("startDate") or value.get("startDateTime") or ""
+        end = value.get("end") or value.get("endDate") or value.get("endDateTime") or ""
+        if start and end:
+            return f"SW {_month_day(str(start))} -{_month_day(str(end))}"
+        if start:
+            return f"SW {_month_day(str(start))}"
+    return f"SW {value}"
+
+
 def summarize_po(order: dict[str, Any], account: AccountConfig) -> dict[str, Any]:
     details = order.get("orderDetails", {}) or {}
     items = details.get("items", []) or []
@@ -190,28 +224,43 @@ def fetch_unconfirmed_pos(account: AccountConfig) -> list[dict[str, Any]]:
 
 def build_message(rows: list[dict[str, Any]]) -> str:
     now_str = datetime.now(CST).strftime("%Y-%m-%d %H:%M")
+    currency = next((row.get("currency") for row in rows if row.get("currency")), "EUR")
+    total_amount = sum(float(row.get("total_net") or 0) for row in rows)
     lines = [
-        f"📌 VC Italy 有新的 unconfirmed PO（近 {DAYS_BACK} 天）",
+        f"📌 VC 后台有新的 unconfirmed PO（近 {DAYS_BACK} 天），请及时查看",
         f"更新时间：{now_str}",
         f"数量：{len(rows)} 个",
         "",
     ]
-    for row in rows[:30]:
-        amount = ""
-        if row.get("total_net"):
-            amount = f"，金额 {row.get('currency', '')}{row.get('total_net')}"
-        ship = f"，发货窗口 {row['ship_window']}" if row.get("ship_window") else ""
-        lines.append(
-            "- "
-            f"{row['account']} / {row['marketplace']}：{row['po_number']}，"
-            f"{row['status']}，{row['po_date']}，"
-            f"{row['sku_count']} SKU，{row['total_qty']} 件"
-            f"{amount}{ship}"
-        )
-    if len(rows) > 30:
-        lines.append(f"- 其余 {len(rows) - 30} 个 PO 未展开")
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in sorted(rows, key=lambda item: (item.get("po_date", ""), item.get("po_number", "")), reverse=True):
+        grouped.setdefault(row.get("po_date") or "日期未知", []).append(row)
+
+    shown = 0
+    for date, group in grouped.items():
+        lines.append(f"- {date}：")
+        for row in group:
+            if shown >= 30:
+                continue
+            amount = _format_money(row.get("currency") or currency, float(row.get("total_net") or 0))
+            ship = _format_ship_window(row.get("ship_window"))
+            ship_part = f"，{ship}" if ship else ""
+            lines.append(
+                "- "
+                f"{row['po_number']}，"
+                f"{row['sku_count']} SKU，{row['total_qty']} 件"
+                f"{ship_part}，金额 {amount}"
+            )
+            shown += 1
+
     lines.append("")
-    lines.append(f"Run：{github_run_label()}")
+    if shown < len(rows):
+        lines.append(f"其余 {len(rows) - shown} 个 PO 未展开")
+        lines.append("")
+    lines.append(
+        f"总金额 {_format_money(currency, total_amount)}，{_format_rmb(total_amount * EUR_TO_RMB_RATE)}"
+    )
     return "\n".join(lines)
 
 

@@ -9,6 +9,7 @@ Workflow:
 - Schedule: every day at 09:00 China time
 - Manual run input: `days_back`, default `1`
 - Feishu chat: `oc_c95fca0100bedfff9cabf3c37e45d4cb`
+- RMB conversion: GitHub variable `EUR_TO_RMB_RATE`, default `7.8`
 
 Required GitHub secrets:
 

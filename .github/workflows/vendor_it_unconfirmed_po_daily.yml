@@ -33,6 +33,7 @@ jobs:
           UNCONFIRMED_PO_CHAT_ID: oc_c95fca0100bedfff9cabf3c37e45d4cb
           UNCONFIRMED_PO_DAYS_BACK: ${{ github.event.inputs.days_back || '1' }}
           UNCONFIRMED_PO_ACCOUNT_SLOTS: IT
+          EUR_TO_RMB_RATE: ${{ vars.EUR_TO_RMB_RATE || '7.8' }}
 
           SP_LWA_APP_ID: ${{ secrets.SP_LWA_APP_ID }}
           SP_LWA_CLIENT_SECRET: ${{ secrets.SP_LWA_CLIENT_SECRET }}
