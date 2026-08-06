@@ -143,6 +143,14 @@ def _format_rmb_w(value: float) -> str:
     return f"RMB {_format_w(value)}"
 
 
+def _is_current_month(date_text: str, now: datetime) -> bool:
+    try:
+        parsed = datetime.strptime(date_text[:10], "%Y-%m-%d")
+    except Exception:
+        return False
+    return parsed.year == now.year and parsed.month == now.month
+
+
 def _month_day(value: str) -> str:
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -238,9 +246,15 @@ def fetch_unconfirmed_pos(account: AccountConfig) -> list[dict[str, Any]]:
 
 
 def build_message(rows: list[dict[str, Any]]) -> str:
-    now_str = datetime.now(CST).strftime("%Y-%m-%d %H:%M")
+    now = datetime.now(CST)
+    now_str = now.strftime("%Y-%m-%d %H:%M")
     currency = next((row.get("currency") for row in rows if row.get("currency")), "EUR")
     total_amount = sum(float(row.get("total_net") or 0) for row in rows)
+    current_month_amount = sum(
+        float(row.get("total_net") or 0)
+        for row in rows
+        if _is_current_month(str(row.get("po_date", "")), now)
+    )
     lines = [
         "📌 VC 后台有 unconfirmed PO，请及时查看",
         f"更新时间：{now_str}",
@@ -277,6 +291,7 @@ def build_message(rows: list[dict[str, Any]]) -> str:
         f"总金额 {currency or 'EUR'} {_format_w(total_amount)}，"
         f"{_format_rmb_w(total_amount * EUR_TO_RMB_RATE)}"
     )
+    lines.append(f"本月挂单：{_format_rmb_w(current_month_amount * EUR_TO_RMB_RATE)}")
     return "\n".join(lines)
 
 
