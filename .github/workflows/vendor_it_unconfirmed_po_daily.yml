@@ -1,0 +1,60 @@
+name: Vendor Italy Unconfirmed PO Daily
+
+on:
+  workflow_dispatch:
+    inputs:
+      days_back:
+        description: 'Created time window in days, 1-7'
+        required: false
+        default: '1'
+  schedule:
+    - cron: '0 1 * * *'
+
+jobs:
+  unconfirmed-po:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check Italy unconfirmed POs
+        env:
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          UNCONFIRMED_PO_CHAT_ID: oc_c95fca0100bedfff9cabf3c37e45d4cb
+          UNCONFIRMED_PO_DAYS_BACK: ${{ github.event.inputs.days_back || '1' }}
+          UNCONFIRMED_PO_ACCOUNT_SLOTS: IT1,IT2
+
+          SP_LWA_APP_ID: ${{ secrets.SP_LWA_APP_ID }}
+          SP_LWA_CLIENT_SECRET: ${{ secrets.SP_LWA_CLIENT_SECRET }}
+          SP_AWS_ACCESS_KEY: ${{ secrets.SP_AWS_ACCESS_KEY }}
+          SP_AWS_SECRET_KEY: ${{ secrets.SP_AWS_SECRET_KEY }}
+          SP_ROLE_ARN: ${{ secrets.SP_ROLE_ARN }}
+
+          IT1_ACCOUNT_LABEL: Italy Account 1
+          IT1_SP_MARKETPLACE: IT
+          IT1_SP_REFRESH_TOKEN: ${{ secrets.IT1_SP_REFRESH_TOKEN }}
+          IT1_SP_LWA_APP_ID: ${{ secrets.IT1_SP_LWA_APP_ID }}
+          IT1_SP_LWA_CLIENT_SECRET: ${{ secrets.IT1_SP_LWA_CLIENT_SECRET }}
+          IT1_SP_AWS_ACCESS_KEY: ${{ secrets.IT1_SP_AWS_ACCESS_KEY }}
+          IT1_SP_AWS_SECRET_KEY: ${{ secrets.IT1_SP_AWS_SECRET_KEY }}
+          IT1_SP_ROLE_ARN: ${{ secrets.IT1_SP_ROLE_ARN }}
+
+          IT2_ACCOUNT_LABEL: Italy Account 2
+          IT2_SP_MARKETPLACE: IT
+          IT2_SP_REFRESH_TOKEN: ${{ secrets.IT2_SP_REFRESH_TOKEN }}
+          IT2_SP_LWA_APP_ID: ${{ secrets.IT2_SP_LWA_APP_ID }}
+          IT2_SP_LWA_CLIENT_SECRET: ${{ secrets.IT2_SP_LWA_CLIENT_SECRET }}
+          IT2_SP_AWS_ACCESS_KEY: ${{ secrets.IT2_SP_AWS_ACCESS_KEY }}
+          IT2_SP_AWS_SECRET_KEY: ${{ secrets.IT2_SP_AWS_SECRET_KEY }}
+          IT2_SP_ROLE_ARN: ${{ secrets.IT2_SP_ROLE_ARN }}
+        run: python unconfirmed_po_monitor.py
