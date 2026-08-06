@@ -144,6 +144,40 @@ def _format_rmb_w(value: float) -> str:
     return f"RMB {_format_w(value)}"
 
 
+def _month_day(value: str) -> str:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return f"{parsed.month}/{parsed.day}"
+    except Exception:
+        return value[:10] if value else ""
+
+
+def _format_ship_window(value: Any) -> str:
+    if not value:
+        return ""
+    if isinstance(value, dict):
+        start = value.get("start") or value.get("startDate") or value.get("startDateTime") or ""
+        end = value.get("end") or value.get("endDate") or value.get("endDateTime") or ""
+        if start and end:
+            return f"SW {_month_day(str(start))} -{_month_day(str(end))}"
+        if start:
+            return f"SW {_month_day(str(start))}"
+    text = str(value)
+    if "--" in text:
+        start, end = text.split("--", 1)
+        return f"SW {_month_day(start)} -{_month_day(end)}"
+    return f"SW {text}"
+
+
+def _ship_window(order: dict[str, Any], details: dict[str, Any]) -> Any:
+    return (
+        details.get("shipWindow")
+        or details.get("deliveryWindow")
+        or order.get("shipWindow")
+        or order.get("deliveryWindow")
+    )
+
+
 def summarize_po(order: dict[str, Any], account: AccountConfig) -> dict[str, Any]:
     details = order.get("orderDetails", {}) or {}
     items = details.get("items", []) or []
@@ -158,7 +192,7 @@ def summarize_po(order: dict[str, Any], account: AccountConfig) -> dict[str, Any
         "po_number": order.get("purchaseOrderNumber", ""),
         "status": order.get("purchaseOrderState", ""),
         "po_date": str(details.get("purchaseOrderDate", ""))[:10],
-        "ship_window": details.get("shipWindow", ""),
+        "ship_window": _ship_window(order, details),
         "sku_count": len(items),
         "total_qty": total_qty,
         "total_net": round(total_net, 2),
@@ -232,11 +266,13 @@ def build_message(rows: list[dict[str, Any]]) -> str:
             if shown >= 30:
                 continue
             amount = _format_money(row.get("currency") or currency, float(row.get("total_net") or 0))
+            ship = _format_ship_window(row.get("ship_window"))
+            ship_part = f"，{ship}" if ship else ""
             lines.append(
                 "  - "
                 f"{row['po_number']}，"
                 f"{row['sku_count']} SKU，{row['total_qty']} 件"
-                f"，金额 {amount}"
+                f"{ship_part}，金额 {amount}"
             )
             shown += 1
         lines.append("")
