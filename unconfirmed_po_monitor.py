@@ -143,20 +143,37 @@ def _format_rmb_w(value: float) -> str:
     return f"RMB {_format_w(value)}"
 
 
-def _is_current_month(date_text: str, now: datetime) -> bool:
+def _parse_date(value: str) -> datetime | None:
     try:
-        parsed = datetime.strptime(date_text[:10], "%Y-%m-%d")
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except Exception:
-        return False
-    return parsed.year == now.year and parsed.month == now.month
+        try:
+            return datetime.strptime(value[:10], "%Y-%m-%d")
+        except Exception:
+            return None
+
+
+def _ship_window_start(value: Any) -> datetime | None:
+    if not value:
+        return None
+    if isinstance(value, dict):
+        start = value.get("start") or value.get("startDate") or value.get("startDateTime") or ""
+        return _parse_date(str(start)) if start else None
+    text = str(value)
+    start = text.split("--", 1)[0] if "--" in text else text
+    return _parse_date(start)
+
+
+def _starts_current_month(value: Any, now: datetime) -> bool:
+    start = _ship_window_start(value)
+    return bool(start and start.year == now.year and start.month == now.month)
 
 
 def _month_day(value: str) -> str:
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    parsed = _parse_date(value)
+    if parsed:
         return f"{parsed.month}/{parsed.day}"
-    except Exception:
-        return value[:10] if value else ""
+    return value[:10] if value else ""
 
 
 def _format_ship_window(value: Any) -> str:
@@ -253,7 +270,7 @@ def build_message(rows: list[dict[str, Any]]) -> str:
     current_month_amount = sum(
         float(row.get("total_net") or 0)
         for row in rows
-        if _is_current_month(str(row.get("po_date", "")), now)
+        if _starts_current_month(row.get("ship_window"), now)
     )
     lines = [
         "📌 VC 后台有 unconfirmed PO，请及时查看",
