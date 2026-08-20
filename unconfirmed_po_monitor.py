@@ -19,6 +19,7 @@ from sp_api.base import SellingApiException
 from vendor_report import (
     CST,
     MARKETPLACE_MAP,
+    load_asin_names,
     money_amount,
     money_currency,
     send_feishu_text,
@@ -117,8 +118,20 @@ def load_account(slot: str) -> AccountConfig | None:
 
 
 def _po_amount(item: dict[str, Any]) -> float:
-    quantity = int((item.get("orderedQuantity") or {}).get("amount") or 0)
+    quantity = _quantity_amount(item)
     return quantity * money_amount(item.get("netCost"))
+
+
+def _quantity_amount(item: dict[str, Any]) -> int:
+    value = item.get("orderedQuantity") or {}
+    if isinstance(value, dict) and isinstance(value.get("orderedQuantity"), dict):
+        value = value.get("orderedQuantity") or {}
+    if isinstance(value, dict):
+        value = value.get("amount")
+    try:
+        return int(float(str(value).replace(",", "")))
+    except Exception:
+        return 0
 
 
 def _format_number(value: float) -> str:
@@ -202,12 +215,42 @@ def _ship_window(order: dict[str, Any], details: dict[str, Any]) -> Any:
     )
 
 
+def _item_product_id(item: dict[str, Any]) -> str:
+    return str(
+        item.get("amazonProductIdentifier")
+        or item.get("buyerProductIdentifier")
+        or item.get("asin")
+        or item.get("ASIN")
+        or ""
+    ).strip()
+
+
+def _summarize_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows = []
+    for item in items:
+        product_id = _item_product_id(item)
+        rows.append(
+            {
+                "product_id": product_id,
+                "vendor_product_id": str(item.get("vendorProductIdentifier") or "").strip(),
+                "fallback_label": str(
+                    item.get("productName")
+                    or item.get("title")
+                    or item.get("vendorProductIdentifier")
+                    or product_id
+                    or item.get("itemSequenceNumber")
+                    or "Unknown item"
+                ).strip(),
+                "quantity": _quantity_amount(item),
+            }
+        )
+    return rows
+
+
 def summarize_po(order: dict[str, Any], account: AccountConfig) -> dict[str, Any]:
     details = order.get("orderDetails", {}) or {}
     items = details.get("items", []) or []
-    total_qty = sum(
-        int((item.get("orderedQuantity") or {}).get("amount") or 0) for item in items
-    )
+    total_qty = sum(_quantity_amount(item) for item in items)
     total_net = sum(_po_amount(item) for item in items)
     currency = money_currency(items[0].get("netCost")) if items else ""
     return {
@@ -221,6 +264,7 @@ def summarize_po(order: dict[str, Any], account: AccountConfig) -> dict[str, Any
         "total_qty": total_qty,
         "total_net": round(total_net, 2),
         "currency": currency,
+        "items": _summarize_items(items),
     }
 
 
@@ -262,7 +306,8 @@ def fetch_unconfirmed_pos(account: AccountConfig) -> list[dict[str, Any]]:
     return rows
 
 
-def build_message(rows: list[dict[str, Any]]) -> str:
+def build_message(rows: list[dict[str, Any]], asin_names: dict[str, str] | None = None) -> str:
+    asin_names = asin_names or {}
     now = datetime.now(CST)
     now_str = now.strftime("%Y-%m-%d %H:%M")
     currency = next((row.get("currency") for row in rows if row.get("currency")), "EUR")
@@ -286,18 +331,24 @@ def build_message(rows: list[dict[str, Any]]) -> str:
     shown = 0
     for date, group in grouped.items():
         lines.append(f"- {date}：")
-        for row in group:
+        for index, row in enumerate(group, start=1):
             if shown >= 30:
                 continue
             amount = _format_money(row.get("currency") or currency, float(row.get("total_net") or 0))
             ship = _format_ship_window(row.get("ship_window"))
-            ship_part = f"，{ship}" if ship else ""
             lines.append(
-                "  - "
-                f"{row['po_number']}，"
-                f"{row['sku_count']} SKU，{row['total_qty']} 件"
-                f"{ship_part}，金额 {amount}"
+                f"{index}. {row['po_number']} | "
+                f"{ship or '-'} | 金额 {amount}"
             )
+            for item in row.get("items", []) or []:
+                label = (
+                    asin_names.get(item.get("product_id", ""))
+                    or item.get("fallback_label")
+                    or item.get("vendor_product_id")
+                    or item.get("product_id")
+                    or "Unknown item"
+                )
+                lines.append(f"    {label} * {item.get('quantity', 0)}")
             shown += 1
         lines.append("")
 
@@ -325,6 +376,11 @@ def build_no_po_message() -> str:
 
 def main() -> None:
     app_id, app_secret = require_feishu_env()
+    xlsx_path = os.environ.get(
+        "ASIN_NAMES_XLSX",
+        os.path.join(os.path.dirname(__file__), "Xiaomi电视产品价格表2025-2026.xlsx"),
+    )
+    asin_names = load_asin_names(xlsx_path)
     accounts = [account for slot in ACCOUNT_SLOTS if (account := load_account(slot))]
     if not accounts:
         raise SystemExit("No valid Italy VC accounts configured.")
@@ -354,7 +410,7 @@ def main() -> None:
         send_feishu_text(app_id, app_secret, CHAT_ID, build_no_po_message())
         return
 
-    send_feishu_text(app_id, app_secret, CHAT_ID, build_message(all_rows))
+    send_feishu_text(app_id, app_secret, CHAT_ID, build_message(all_rows, asin_names))
 
 
 if __name__ == "__main__":
