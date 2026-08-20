@@ -312,6 +312,17 @@ def build_message(rows: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def build_no_po_message() -> str:
+    now_str = datetime.now(CST).strftime("%Y-%m-%d %H:%M")
+    return "\n".join(
+        [
+            "📌 VC 后台当前没有 unconfirmed PO",
+            f"更新时间：{now_str}",
+            "数量：0 个",
+        ]
+    )
+
+
 def main() -> None:
     app_id, app_secret = require_feishu_env()
     accounts = [account for slot in ACCOUNT_SLOTS if (account := load_account(slot))]
@@ -339,7 +350,8 @@ def main() -> None:
         raise SystemExit(1)
 
     if not all_rows:
-        logger.info("No unconfirmed PO found. No Feishu message sent.")
+        logger.info("No unconfirmed PO found. Sending Feishu status message.")
+        send_feishu_text(app_id, app_secret, CHAT_ID, build_no_po_message())
         return
 
     send_feishu_text(app_id, app_secret, CHAT_ID, build_message(all_rows))
