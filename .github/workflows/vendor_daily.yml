@@ -23,11 +23,11 @@ jobs:
         env:
           SP_LWA_APP_ID: ${{ secrets.SP_LWA_APP_ID }}
           SP_LWA_CLIENT_SECRET: ${{ secrets.SP_LWA_CLIENT_SECRET }}
-          SP_REFRESH_TOKEN: ${{ secrets.SP_REFRESH_TOKEN }}
+          SP_REFRESH_TOKEN: ${{ secrets.IT_SP_REFRESH_TOKEN }}
           SP_AWS_ACCESS_KEY: ${{ secrets.SP_AWS_ACCESS_KEY }}
           SP_AWS_SECRET_KEY: ${{ secrets.SP_AWS_SECRET_KEY }}
           SP_ROLE_ARN: ${{ secrets.SP_ROLE_ARN }}
-          SP_MARKETPLACE: DE
+          SP_MARKETPLACE: IT
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           BITABLE_APP_TOKEN: ${{ secrets.BITABLE_APP_TOKEN }}

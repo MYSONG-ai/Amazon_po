@@ -512,9 +512,23 @@ def is_monitor_name(name: str) -> bool:
     return model.endswith("I")
 
 
+def _monitor_sku_rows(rows: list[dict[str, Any]], asin_names: dict[str, str]) -> list[tuple[str, int]]:
+    monitor_rows: list[tuple[str, int]] = []
+    for row in rows:
+        units = int(row.get("ordered_units") or 0)
+        if units <= 0:
+            continue
+        asin = row.get("asin", "")
+        name = asin_names.get(asin, asin)
+        if is_monitor_name(name):
+            monitor_rows.append((name, units))
+    return sorted(monitor_rows, key=lambda item: (-item[1], item[0]))
+
+
 def build_sales_update_text(date_str: str, rows: list[dict[str, Any]], asin_names: dict[str, str]) -> str:
     total = sum(int(r.get("ordered_units") or 0) for r in rows if int(r.get("ordered_units") or 0) > 0)
     totals = {key: 0 for _, key in SALES_SUMMARY_CATEGORIES}
+    monitor_rows = _monitor_sku_rows(rows, asin_names)
     for row in rows:
         units = int(row.get("ordered_units") or 0)
         if units <= 0:
@@ -530,6 +544,8 @@ def build_sales_update_text(date_str: str, rows: list[dict[str, Any]], asin_name
     for label, key in SALES_SUMMARY_CATEGORIES:
         if key == "MONITOR":
             lines.append(f"• {label}：{totals[key]} 台")
+            for sku_name, sku_units in monitor_rows:
+                lines.append(f"  - {sku_name}：{sku_units} 台")
             continue
         share = totals[key] / tv_total if tv_total else 0
         lines.append(f"• {label}：{totals[key]} 台，占比 {share:.1%}")
