@@ -49,8 +49,6 @@ REQUIRED_ENV = (
     "SP_ROLE_ARN",
     "FEISHU_APP_ID",
     "FEISHU_APP_SECRET",
-    "BITABLE_APP_TOKEN",
-    "BITABLE_TABLE_ID",
 )
 
 REPORT_WAIT_SECONDS = int(os.environ.get("REPORT_WAIT_SECONDS", "60"))
@@ -137,6 +135,20 @@ _BITABLE_FIELDS = [
     ("退货/取消量", 2),
 ]
 
+SALES_SHEET_HEADERS = [
+    "日期",
+    "站点",
+    "产品名",
+    "ASIN",
+    "已订购量",
+    "ASP",
+    "订购金额",
+    "币种",
+    "退货/取消量",
+    "更新时间",
+    "Report ID",
+]
+
 
 def feishu_token(app_id: str, app_secret: str) -> str:
     resp = requests.post(
@@ -185,6 +197,173 @@ def send_feishu_text(app_id: str, app_secret: str, chat_id: str, text: str) -> N
         logger.error("Feishu text send failed: %s", payload)
     else:
         logger.info("Feishu text sent to chat_id=%s", chat_id)
+
+
+def _sheet_get(token: str, url: str) -> dict:
+    return requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=30).json()
+
+
+def _sheet_post(token: str, url: str, body: dict) -> dict:
+    return requests.post(
+        url,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json=body,
+        timeout=30,
+    ).json()
+
+
+def _column_letter(column_count: int) -> str:
+    result = ""
+    n = column_count
+    while n:
+        n, remainder = divmod(n - 1, 26)
+        result = chr(65 + remainder) + result
+    return result or "A"
+
+
+def _cell_row(cell: str) -> int:
+    digits = "".join(ch for ch in cell if ch.isdigit())
+    return int(digits or "1")
+
+
+def _sheets_put_values(
+    token: str,
+    spreadsheet_token: str,
+    sheet_id: str,
+    start_cell: str,
+    values: list[list[Any]],
+) -> None:
+    if not values:
+        return
+    end_col = _column_letter(len(values[0]))
+    end_row = _cell_row(start_cell) + len(values) - 1
+    resp = requests.put(
+        f"https://open.feishu.cn/open-apis/sheets/v2/spreadsheets/{spreadsheet_token}/values",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json={
+            "valueRange": {
+                "range": f"{sheet_id}!{start_cell}:{end_col}{end_row}",
+                "values": values,
+            }
+        },
+        timeout=30,
+    ).json()
+    if resp.get("code") != 0:
+        raise RuntimeError(f"Feishu Sheets values write failed: {resp}")
+
+
+def _sheets_append_values(
+    token: str,
+    spreadsheet_token: str,
+    sheet_id: str,
+    values: list[list[Any]],
+) -> None:
+    if not values:
+        return
+    end_col = _column_letter(len(values[0]))
+    end_row = len(values)
+    resp = requests.post(
+        f"https://open.feishu.cn/open-apis/sheets/v2/spreadsheets/{spreadsheet_token}/values_append",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json={"valueRange": {"range": f"{sheet_id}!A1:{end_col}{end_row}", "values": values}},
+        timeout=30,
+    ).json()
+    if resp.get("code") != 0:
+        raise RuntimeError(f"Feishu Sheets values append failed: {resp}")
+
+
+def _first_sheet_id(token: str, spreadsheet_token: str) -> str:
+    resp = _sheet_get(
+        token,
+        f"https://open.feishu.cn/open-apis/sheets/v3/spreadsheets/{spreadsheet_token}/sheets/query",
+    )
+    if resp.get("code") != 0:
+        raise RuntimeError(f"Feishu Sheets metadata query failed: {resp}")
+    sheets = resp.get("data", {}).get("sheets", [])
+    if not sheets:
+        raise RuntimeError(f"Feishu Sheets metadata has no sheets: {resp}")
+    return sheets[0]["sheet_id"]
+
+
+def sales_spreadsheet_ensure(token: str) -> tuple[str, str]:
+    spreadsheet_token = os.environ.get("SALES_SPREADSHEET_TOKEN", "")
+    sheet_id = os.environ.get("SALES_SHEET_ID", "")
+    if spreadsheet_token:
+        sheet_id = sheet_id or _first_sheet_id(token, spreadsheet_token)
+        _sheets_put_values(token, spreadsheet_token, sheet_id, "A1", [SALES_SHEET_HEADERS])
+        return spreadsheet_token, sheet_id
+
+    resp = _sheet_post(
+        token,
+        "https://open.feishu.cn/open-apis/sheets/v3/spreadsheets",
+        {"title": "Vendor Central Italy Daily Report"},
+    )
+    if resp.get("code") != 0:
+        raise RuntimeError(f"Create sales spreadsheet failed: {resp}")
+    spreadsheet = resp.get("data", {}).get("spreadsheet", {})
+    spreadsheet_token = spreadsheet.get("spreadsheet_token")
+    if not spreadsheet_token:
+        raise RuntimeError(f"Create sales spreadsheet returned no token: {resp}")
+    sheet_id = _first_sheet_id(token, spreadsheet_token)
+    _sheets_put_values(token, spreadsheet_token, sheet_id, "A1", [SALES_SHEET_HEADERS])
+    logger.info("Sales spreadsheet created: %s", spreadsheet.get("url", ""))
+    logger.info(
+        "Add this to GitHub Secrets or workflow env to reuse the same spreadsheet:\n"
+        "  SALES_SPREADSHEET_TOKEN=%s",
+        spreadsheet_token,
+    )
+    return spreadsheet_token, sheet_id
+
+
+def write_to_sales_sheet(
+    sales: FetchResult,
+    report_date: datetime,
+    marketplace_name: str,
+    asin_names: dict[str, str],
+    feishu_app_id: str,
+    feishu_app_secret: str,
+) -> bool:
+    if not sales.ok or not sales.rows:
+        logger.info("Sales spreadsheet write skipped: no sales data")
+        return False
+
+    token = feishu_token(feishu_app_id, feishu_app_secret)
+    spreadsheet_token, sheet_id = sales_spreadsheet_ensure(token)
+    date_str = report_date.strftime("%Y-%m-%d")
+    updated_at = datetime.now(CST).strftime("%Y-%m-%d %H:%M:%S")
+    values = []
+    for row in sales.rows:
+        asin = row.get("asin", "")
+        units = int(row.get("ordered_units") or 0)
+        rev = float(row.get("ordered_revenue") or 0)
+        currency = row.get("currency") or ""
+        if units > 0:
+            ordered, cancelled, asp, revenue = units, 0, round(rev / units, 2), round(rev, 2)
+        elif units < 0:
+            ordered, cancelled, asp, revenue = 0, abs(units), 0.0, 0
+        else:
+            continue
+        values.append(
+            [
+                date_str,
+                marketplace_name,
+                asin_names.get(asin, asin),
+                asin,
+                ordered,
+                asp,
+                revenue,
+                currency,
+                cancelled,
+                updated_at,
+                sales.report_id or "",
+            ]
+        )
+
+    for i in range(0, len(values), 500):
+        batch = values[i:i + 500]
+        _sheets_append_values(token, spreadsheet_token, sheet_id, batch)
+        logger.info("Sales spreadsheet: wrote %d rows for %s", len(batch), date_str)
+    return bool(values)
 
 
 # ===================== Feishu Bitable =====================
@@ -842,7 +1021,14 @@ def main():
     sales = fetch_sales_report(report_date, credentials, marketplace)
     logger.info("Sales result: ok=%s rows=%s message=%s", sales.ok, len(sales.rows), sales.message)
 
-    written = write_to_bitable(sales, report_date, asin_names, env["FEISHU_APP_ID"], env["FEISHU_APP_SECRET"])
+    written = write_to_sales_sheet(
+        sales,
+        report_date,
+        marketplace_name,
+        asin_names,
+        env["FEISHU_APP_ID"],
+        env["FEISHU_APP_SECRET"],
+    )
 
     chat_id = os.environ.get("FEISHU_VENDOR_CHAT_ID", "")
     if written and chat_id:
@@ -857,7 +1043,14 @@ def main():
     accurate = fetch_vendor_sales_report(upgrade_date, credentials, marketplace)
     logger.info("Upgrade fetch: ok=%s rows=%s message=%s", accurate.ok, len(accurate.rows), accurate.message)
     if accurate.ok and accurate.rows:
-        replace_bitable_date(upgrade_date, accurate, asin_names, env["FEISHU_APP_ID"], env["FEISHU_APP_SECRET"])
+        write_to_sales_sheet(
+            accurate,
+            upgrade_date,
+            marketplace_name,
+            asin_names,
+            env["FEISHU_APP_ID"],
+            env["FEISHU_APP_SECRET"],
+        )
     else:
         logger.warning("Upgrade skipped for %s: %s", upgrade_date.strftime("%Y-%m-%d"), accurate.message)
 
