@@ -9,6 +9,8 @@ the message instead of being hidden as empty data.
 from __future__ import annotations
 
 import gzip
+import csv
+import io
 import json
 import logging
 import os
@@ -215,14 +217,6 @@ def _cell_row(cell: str) -> int:
     return int(digits or "1")
 
 
-def _cell_col(cell: str) -> int:
-    letters = "".join(ch for ch in cell.upper() if "A" <= ch <= "Z")
-    total = 0
-    for ch in letters:
-        total = total * 26 + ord(ch) - ord("A") + 1
-    return total or 1
-
-
 def _sheets_put_values(
     token: str,
     spreadsheet_token: str,
@@ -232,17 +226,23 @@ def _sheets_put_values(
 ) -> None:
     if not values:
         return
-    start_col = _cell_col(start_cell)
-    end_col = _column_letter(start_col + len(values[0]) - 1)
-    end_row = _cell_row(start_cell) + len(values) - 1
-    resp = requests.put(
-        f"https://open.feishu.cn/open-apis/sheets/v2/spreadsheets/{spreadsheet_token}/values",
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerows(values)
+    resp = requests.post(
+        f"https://open.feishu.cn/open-apis/sheet_ai/v2/spreadsheets/{spreadsheet_token}/tools/invoke_write",
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         json={
-            "valueRange": {
-                "range": f"{sheet_id}!{start_cell}:{end_col}{end_row}",
-                "values": values,
-            }
+            "tool_name": "set_range_from_csv",
+            "input": json.dumps(
+                {
+                    "excel_id": spreadsheet_token,
+                    "sheet_id": sheet_id,
+                    "start_cell": start_cell,
+                    "csv": buffer.getvalue(),
+                },
+                ensure_ascii=False,
+            ),
         },
         timeout=30,
     ).json()
