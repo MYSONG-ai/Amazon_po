@@ -306,17 +306,21 @@ def sales_spreadsheet_ensure(token: str) -> tuple[str, str]:
 def _date_column_index(values: list[list[Any]], date_str: str) -> int:
     header = values[0] if values else []
     for index, cell in enumerate(header):
-        if str(cell).strip() == date_str:
+        if _cell_text(cell) == date_str:
             return index + 1
     last_used = 0
     for index, cell in enumerate(header):
-        if str(cell).strip():
+        if _cell_text(cell):
             last_used = index + 1
     return max(last_used + 1, 5)
 
 
+def _cell_text(value: Any) -> str:
+    return "" if value is None else str(value).strip()
+
+
 def _row_asin(row: list[Any]) -> str:
-    return str(row[0]).strip() if row else ""
+    return _cell_text(row[0]) if row else ""
 
 
 def _write_sales_tab_by_asin(
