@@ -135,19 +135,8 @@ _BITABLE_FIELDS = [
     ("退货/取消量", 2),
 ]
 
-SALES_SHEET_HEADERS = [
-    "日期",
-    "站点",
-    "产品名",
-    "ASIN",
-    "已订购量",
-    "ASP",
-    "订购金额",
-    "币种",
-    "退货/取消量",
-    "更新时间",
-    "Report ID",
-]
+DEFAULT_TV_SHEET_ID = "9b88d3"
+DEFAULT_MONITOR_SHEET_ID = "ZwTzBK"
 
 
 def feishu_token(app_id: str, app_secret: str) -> str:
@@ -252,24 +241,20 @@ def _sheets_put_values(
         raise RuntimeError(f"Feishu Sheets values write failed: {resp}")
 
 
-def _sheets_append_values(
+def _sheets_get_values(
     token: str,
     spreadsheet_token: str,
     sheet_id: str,
-    values: list[list[Any]],
-) -> None:
-    if not values:
-        return
-    end_col = _column_letter(len(values[0]))
-    end_row = len(values)
-    resp = requests.post(
-        f"https://open.feishu.cn/open-apis/sheets/v2/spreadsheets/{spreadsheet_token}/values_append",
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        json={"valueRange": {"range": f"{sheet_id}!A1:{end_col}{end_row}", "values": values}},
+    range_a1: str,
+) -> list[list[Any]]:
+    resp = requests.get(
+        f"https://open.feishu.cn/open-apis/sheets/v2/spreadsheets/{spreadsheet_token}/values/{sheet_id}!{range_a1}",
+        headers={"Authorization": f"Bearer {token}"},
         timeout=30,
     ).json()
     if resp.get("code") != 0:
-        raise RuntimeError(f"Feishu Sheets values append failed: {resp}")
+        raise RuntimeError(f"Feishu Sheets values read failed: {resp}")
+    return resp.get("data", {}).get("valueRange", {}).get("values", []) or []
 
 
 def _first_sheet_id(token: str, spreadsheet_token: str) -> str:
@@ -289,9 +274,7 @@ def sales_spreadsheet_ensure(token: str) -> tuple[str, str]:
     spreadsheet_token = os.environ.get("SALES_SPREADSHEET_TOKEN", "")
     sheet_id = os.environ.get("SALES_SHEET_ID", "")
     if spreadsheet_token:
-        sheet_id = sheet_id or _first_sheet_id(token, spreadsheet_token)
-        _sheets_put_values(token, spreadsheet_token, sheet_id, "A1", [SALES_SHEET_HEADERS])
-        return spreadsheet_token, sheet_id
+        return spreadsheet_token, sheet_id or _first_sheet_id(token, spreadsheet_token)
 
     resp = _sheet_post(
         token,
@@ -305,7 +288,6 @@ def sales_spreadsheet_ensure(token: str) -> tuple[str, str]:
     if not spreadsheet_token:
         raise RuntimeError(f"Create sales spreadsheet returned no token: {resp}")
     sheet_id = _first_sheet_id(token, spreadsheet_token)
-    _sheets_put_values(token, spreadsheet_token, sheet_id, "A1", [SALES_SHEET_HEADERS])
     logger.info("Sales spreadsheet created: %s", spreadsheet.get("url", ""))
     logger.info(
         "Add this to GitHub Secrets or workflow env to reuse the same spreadsheet:\n"
@@ -313,6 +295,60 @@ def sales_spreadsheet_ensure(token: str) -> tuple[str, str]:
         spreadsheet_token,
     )
     return spreadsheet_token, sheet_id
+
+
+def _date_column_index(values: list[list[Any]], date_str: str) -> int:
+    header = values[0] if values else []
+    for index, cell in enumerate(header):
+        if str(cell).strip() == date_str:
+            return index + 1
+    last_used = 0
+    for index, cell in enumerate(header):
+        if str(cell).strip():
+            last_used = index + 1
+    return max(last_used + 1, 5)
+
+
+def _row_asin(row: list[Any]) -> str:
+    return str(row[0]).strip() if row else ""
+
+
+def _write_sales_tab_by_asin(
+    token: str,
+    spreadsheet_token: str,
+    sheet_id: str,
+    date_str: str,
+    quantities_by_asin: dict[str, int],
+) -> int:
+    values = _sheets_get_values(token, spreadsheet_token, sheet_id, "A1:ZZ500")
+    if not values:
+        raise RuntimeError(f"Sales sheet {sheet_id} is empty")
+
+    date_col = _date_column_index(values, date_str)
+    rows_to_write: list[list[Any]] = [[date_str], [0]]
+    total = 0
+    last_row = 2
+    for row_index, row in enumerate(values[2:], start=3):
+        asin = _row_asin(row)
+        if not asin:
+            rows_to_write.append([""])
+            continue
+        quantity = int(quantities_by_asin.get(asin, 0))
+        rows_to_write.append([quantity if quantity else ""])
+        total += quantity
+        last_row = row_index
+
+    rows_to_write[1] = [total]
+    start_cell = f"{_column_letter(date_col)}1"
+    _sheets_put_values(token, spreadsheet_token, sheet_id, start_cell, rows_to_write)
+    logger.info(
+        "Sales spreadsheet tab %s: wrote %s column with %d ASIN rows, total=%d",
+        sheet_id,
+        date_str,
+        max(last_row - 2, 0),
+        total,
+    )
+    return total
 
 
 def write_to_sales_sheet(
@@ -329,41 +365,41 @@ def write_to_sales_sheet(
 
     token = feishu_token(feishu_app_id, feishu_app_secret)
     spreadsheet_token, sheet_id = sales_spreadsheet_ensure(token)
+    tv_sheet_id = os.environ.get("SALES_TV_SHEET_ID", "") or sheet_id or DEFAULT_TV_SHEET_ID
+    monitor_sheet_id = os.environ.get("SALES_MONITOR_SHEET_ID", "") or DEFAULT_MONITOR_SHEET_ID
     date_str = report_date.strftime("%Y-%m-%d")
-    updated_at = datetime.now(CST).strftime("%Y-%m-%d %H:%M:%S")
-    values = []
+    quantities_by_asin: dict[str, int] = {}
     for row in sales.rows:
         asin = row.get("asin", "")
         units = int(row.get("ordered_units") or 0)
-        rev = float(row.get("ordered_revenue") or 0)
-        currency = row.get("currency") or ""
-        if units > 0:
-            ordered, cancelled, asp, revenue = units, 0, round(rev / units, 2), round(rev, 2)
-        elif units < 0:
-            ordered, cancelled, asp, revenue = 0, abs(units), 0.0, 0
-        else:
+        if not asin or units <= 0:
             continue
-        values.append(
-            [
-                date_str,
-                marketplace_name,
-                asin_names.get(asin, asin),
-                asin,
-                ordered,
-                asp,
-                revenue,
-                currency,
-                cancelled,
-                updated_at,
-                sales.report_id or "",
-            ]
-        )
+        quantities_by_asin[asin] = quantities_by_asin.get(asin, 0) + units
 
-    for i in range(0, len(values), 500):
-        batch = values[i:i + 500]
-        _sheets_append_values(token, spreadsheet_token, sheet_id, batch)
-        logger.info("Sales spreadsheet: wrote %d rows for %s", len(batch), date_str)
-    return bool(values)
+    tv_total = _write_sales_tab_by_asin(
+        token,
+        spreadsheet_token,
+        tv_sheet_id,
+        date_str,
+        quantities_by_asin,
+    )
+    monitor_total = 0
+    if monitor_sheet_id:
+        monitor_total = _write_sales_tab_by_asin(
+            token,
+            spreadsheet_token,
+            monitor_sheet_id,
+            date_str,
+            quantities_by_asin,
+        )
+    logger.info(
+        "Sales spreadsheet: wrote %s by ASIN for marketplace=%s tv_total=%d monitor_total=%d",
+        date_str,
+        marketplace_name,
+        tv_total,
+        monitor_total,
+    )
+    return bool(quantities_by_asin)
 
 
 # ===================== Feishu Bitable =====================
