@@ -215,6 +215,14 @@ def _cell_row(cell: str) -> int:
     return int(digits or "1")
 
 
+def _cell_col(cell: str) -> int:
+    letters = "".join(ch for ch in cell.upper() if "A" <= ch <= "Z")
+    total = 0
+    for ch in letters:
+        total = total * 26 + ord(ch) - ord("A") + 1
+    return total or 1
+
+
 def _sheets_put_values(
     token: str,
     spreadsheet_token: str,
@@ -224,7 +232,8 @@ def _sheets_put_values(
 ) -> None:
     if not values:
         return
-    end_col = _column_letter(len(values[0]))
+    start_col = _cell_col(start_cell)
+    end_col = _column_letter(start_col + len(values[0]) - 1)
     end_row = _cell_row(start_cell) + len(values) - 1
     resp = requests.put(
         f"https://open.feishu.cn/open-apis/sheets/v2/spreadsheets/{spreadsheet_token}/values",
