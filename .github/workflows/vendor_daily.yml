@@ -21,12 +21,12 @@ jobs:
 
       - name: Run Vendor Report
         env:
-          SP_LWA_APP_ID: ${{ secrets.SP_LWA_APP_ID }}
-          SP_LWA_CLIENT_SECRET: ${{ secrets.SP_LWA_CLIENT_SECRET }}
+          SP_LWA_APP_ID: ${{ secrets.IT_SP_LWA_APP_ID }}
+          SP_LWA_CLIENT_SECRET: ${{ secrets.IT_SP_LWA_CLIENT_SECRET }}
           SP_REFRESH_TOKEN: ${{ secrets.IT_SP_REFRESH_TOKEN }}
-          SP_AWS_ACCESS_KEY: ${{ secrets.SP_AWS_ACCESS_KEY }}
-          SP_AWS_SECRET_KEY: ${{ secrets.SP_AWS_SECRET_KEY }}
-          SP_ROLE_ARN: ${{ secrets.SP_ROLE_ARN }}
+          SP_AWS_ACCESS_KEY: ${{ secrets.IT_SP_AWS_ACCESS_KEY }}
+          SP_AWS_SECRET_KEY: ${{ secrets.IT_SP_AWS_SECRET_KEY }}
+          SP_ROLE_ARN: ${{ secrets.IT_SP_ROLE_ARN }}
           SP_MARKETPLACE: IT
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
