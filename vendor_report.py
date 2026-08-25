@@ -307,6 +307,14 @@ def _normalize_sheet_date(value: Any) -> str:
     text = _cell_text(value)
     if not text:
         return ""
+    if re.fullmatch(r"\d+(\.\d+)?", text):
+        try:
+            serial = float(text)
+        except ValueError:
+            serial = 0
+        if 40000 <= serial <= 60000:
+            date_value = datetime(1899, 12, 30) + timedelta(days=int(serial))
+            return date_value.strftime("%Y-%m-%d")
     if re.fullmatch(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}", text):
         parts = re.split(r"[-/]", text)
         return f"{int(parts[0]):04d}-{int(parts[1]):02d}-{int(parts[2]):02d}"
@@ -315,13 +323,23 @@ def _normalize_sheet_date(value: Any) -> str:
 
 def _date_column_index(values: list[list[Any]], date_str: str) -> tuple[int, bool]:
     header = values[0] if values else []
-    for index, cell in enumerate(header):
+    last_used = 0
+    empty_after_dates = 0
+    date_region_end = len(header)
+    for index, cell in enumerate(header[4:], start=5):
+        text = _cell_text(cell)
+        if text:
+            last_used = index
+            empty_after_dates = 0
+            continue
+        empty_after_dates += 1
+        if empty_after_dates >= 3:
+            date_region_end = index - empty_after_dates
+            break
+
+    for index, cell in enumerate(header[:date_region_end]):
         if _normalize_sheet_date(cell) == date_str:
             return index + 1, True
-    last_used = 0
-    for index, cell in enumerate(header):
-        if _cell_text(cell):
-            last_used = index + 1
     return max(last_used + 1, 5), False
 
 
