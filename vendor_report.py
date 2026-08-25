@@ -303,16 +303,26 @@ def sales_spreadsheet_ensure(token: str) -> tuple[str, str]:
     return spreadsheet_token, sheet_id
 
 
-def _date_column_index(values: list[list[Any]], date_str: str) -> int:
+def _normalize_sheet_date(value: Any) -> str:
+    text = _cell_text(value)
+    if not text:
+        return ""
+    if re.fullmatch(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}", text):
+        parts = re.split(r"[-/]", text)
+        return f"{int(parts[0]):04d}-{int(parts[1]):02d}-{int(parts[2]):02d}"
+    return text
+
+
+def _date_column_index(values: list[list[Any]], date_str: str) -> tuple[int, bool]:
     header = values[0] if values else []
     for index, cell in enumerate(header):
-        if _cell_text(cell) == date_str:
-            return index + 1
+        if _normalize_sheet_date(cell) == date_str:
+            return index + 1, True
     last_used = 0
     for index, cell in enumerate(header):
         if _cell_text(cell):
             last_used = index + 1
-    return max(last_used + 1, 5)
+    return max(last_used + 1, 5), False
 
 
 def _cell_text(value: Any) -> str:
@@ -321,6 +331,10 @@ def _cell_text(value: Any) -> str:
 
 def _row_asin(row: list[Any]) -> str:
     return _cell_text(row[0]) if row else ""
+
+
+def _row_has_template(row: list[Any]) -> bool:
+    return any(_cell_text(cell) for cell in row[:4])
 
 
 def _write_sales_tab_by_asin(
@@ -334,29 +348,34 @@ def _write_sales_tab_by_asin(
     if not values:
         raise RuntimeError(f"Sales sheet {sheet_id} is empty")
 
-    date_col = _date_column_index(values, date_str)
-    rows_to_write: list[list[Any]] = [[date_str], [0]]
-    total = 0
+    date_col, date_found = _date_column_index(values, date_str)
     last_row = 2
     for row_index, row in enumerate(values[2:], start=3):
-        asin = _row_asin(row)
-        if not asin:
-            rows_to_write.append([""])
-            continue
-        quantity = int(quantities_by_asin.get(asin, 0))
-        rows_to_write.append([quantity if quantity else ""])
-        total += quantity
-        last_row = row_index
+        if _row_has_template(row):
+            last_row = row_index
 
-    rows_to_write[1] = [total]
-    start_cell = f"{_column_letter(date_col)}1"
+    col_letter = _column_letter(date_col)
+    rows_to_write: list[list[Any]] = [[f"=SUM({col_letter}3:{col_letter}{last_row})"]]
+    total = 0
+    for row in values[2:last_row]:
+        asin = _row_asin(row)
+        quantity = int(quantities_by_asin.get(asin, 0)) if asin else 0
+        rows_to_write.append([quantity])
+        total += quantity
+
+    start_cell = f"{col_letter}2"
+    if not date_found:
+        year, month, day = (int(part) for part in date_str.split("-"))
+        rows_to_write.insert(0, [f"=DATE({year},{month},{day})"])
+        start_cell = f"{col_letter}1"
     _sheets_put_values(token, spreadsheet_token, sheet_id, start_cell, rows_to_write)
     logger.info(
-        "Sales spreadsheet tab %s: wrote %s column with %d ASIN rows, total=%d",
+        "Sales spreadsheet tab %s: wrote %s column with %d template rows, total=%d, date_found=%s",
         sheet_id,
         date_str,
         max(last_row - 2, 0),
         total,
+        date_found,
     )
     return total
 
