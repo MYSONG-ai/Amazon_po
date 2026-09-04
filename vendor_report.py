@@ -321,12 +321,22 @@ def _normalize_sheet_date(value: Any) -> str:
     return text
 
 
-def _date_column_index(values: list[list[Any]], date_str: str) -> tuple[int, bool]:
-    header = values[0] if values else []
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name, "")
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        logger.warning("Invalid %s=%r, using %d", name, value, default)
+        return default
+
+
+def _date_column_index(header: list[Any], date_str: str, first_date_col: int) -> tuple[int, bool]:
     last_used = 0
     empty_after_dates = 0
     date_region_end = len(header)
-    for index, cell in enumerate(header[4:], start=5):
+    for index, cell in enumerate(header[first_date_col - 1:], start=first_date_col):
         text = _cell_text(cell)
         if text:
             last_used = index
@@ -340,19 +350,19 @@ def _date_column_index(values: list[list[Any]], date_str: str) -> tuple[int, boo
     for index, cell in enumerate(header[:date_region_end]):
         if _normalize_sheet_date(cell) == date_str:
             return index + 1, True
-    return max(last_used + 1, 5), False
+    return max(last_used + 1, first_date_col), False
 
 
 def _cell_text(value: Any) -> str:
     return "" if value is None else str(value).strip()
 
 
-def _row_asin(row: list[Any]) -> str:
-    return _cell_text(row[0]) if row else ""
+def _row_asin(row: list[Any], asin_col: int) -> str:
+    return _cell_text(row[asin_col - 1]) if len(row) >= asin_col else ""
 
 
-def _row_has_template(row: list[Any]) -> bool:
-    return any(_cell_text(cell) for cell in row[:4])
+def _row_has_template(row: list[Any], template_col_count: int) -> bool:
+    return any(_cell_text(cell) for cell in row[:template_col_count])
 
 
 def _write_sales_tab_by_asin(
@@ -361,39 +371,52 @@ def _write_sales_tab_by_asin(
     sheet_id: str,
     date_str: str,
     quantities_by_asin: dict[str, int],
+    *,
+    header_row: int = 1,
+    data_start_row: int = 3,
+    asin_col: int = 1,
+    first_date_col: int = 5,
+    total_row: int = 2,
 ) -> int:
     values = _sheets_get_values(token, spreadsheet_token, sheet_id, "A1:ZZ500")
     if not values:
         raise RuntimeError(f"Sales sheet {sheet_id} is empty")
 
-    date_col, date_found = _date_column_index(values, date_str)
-    last_row = 2
-    for row_index, row in enumerate(values[2:], start=3):
-        if _row_has_template(row):
+    header = values[header_row - 1] if len(values) >= header_row else []
+    date_col, date_found = _date_column_index(header, date_str, first_date_col)
+    template_col_count = max(asin_col, first_date_col - 1)
+    last_row = data_start_row - 1
+    for row_index, row in enumerate(values[data_start_row - 1:], start=data_start_row):
+        if _row_has_template(row, template_col_count):
             last_row = row_index
 
     col_letter = _column_letter(date_col)
-    rows_to_write: list[list[Any]] = [[f"=SUM({col_letter}3:{col_letter}{last_row})"]]
+    rows_to_write: list[list[Any]] = []
+    start_cell = f"{col_letter}{data_start_row}"
+    if total_row:
+        rows_to_write.append([f"=SUM({col_letter}{data_start_row}:{col_letter}{last_row})"])
+        start_cell = f"{col_letter}{total_row}"
+
     total = 0
-    for row in values[2:last_row]:
-        asin = _row_asin(row)
+    for row in values[data_start_row - 1:last_row]:
+        asin = _row_asin(row, asin_col)
         quantity = int(quantities_by_asin.get(asin, 0)) if asin else 0
         rows_to_write.append([quantity])
         total += quantity
 
-    start_cell = f"{col_letter}2"
     if not date_found:
         year, month, day = (int(part) for part in date_str.split("-"))
         rows_to_write.insert(0, [f"=DATE({year},{month},{day})"])
-        start_cell = f"{col_letter}1"
+        start_cell = f"{col_letter}{header_row}"
     _sheets_put_values(token, spreadsheet_token, sheet_id, start_cell, rows_to_write)
     logger.info(
-        "Sales spreadsheet tab %s: wrote %s column with %d template rows, total=%d, date_found=%s",
+        "Sales spreadsheet tab %s: wrote %s column with %d template rows, total=%d, date_found=%s, asin_col=%d",
         sheet_id,
         date_str,
-        max(last_row - 2, 0),
+        max(last_row - data_start_row + 1, 0),
         total,
         date_found,
+        asin_col,
     )
     return total
 
@@ -412,8 +435,14 @@ def write_to_sales_sheet(
 
     token = feishu_token(feishu_app_id, feishu_app_secret)
     spreadsheet_token, sheet_id = sales_spreadsheet_ensure(token)
+    combined_sheet_id = os.environ.get("SALES_SHEET_ID", "")
     tv_sheet_id = os.environ.get("SALES_TV_SHEET_ID", "") or sheet_id or DEFAULT_TV_SHEET_ID
     monitor_sheet_id = os.environ.get("SALES_MONITOR_SHEET_ID", "") or DEFAULT_MONITOR_SHEET_ID
+    header_row = _env_int("SALES_HEADER_ROW", 1)
+    data_start_row = _env_int("SALES_DATA_START_ROW", 3)
+    asin_col = _env_int("SALES_ASIN_COLUMN", 1)
+    first_date_col = _env_int("SALES_FIRST_DATE_COLUMN", 5)
+    total_row = _env_int("SALES_TOTAL_ROW", 2)
     date_str = report_date.strftime("%Y-%m-%d")
     quantities_by_asin: dict[str, int] = {}
     for row in sales.rows:
@@ -422,6 +451,28 @@ def write_to_sales_sheet(
         if not asin or units <= 0:
             continue
         quantities_by_asin[asin] = quantities_by_asin.get(asin, 0) + units
+
+    if combined_sheet_id:
+        total = _write_sales_tab_by_asin(
+            token,
+            spreadsheet_token,
+            combined_sheet_id,
+            date_str,
+            quantities_by_asin,
+            header_row=header_row,
+            data_start_row=data_start_row,
+            asin_col=asin_col,
+            first_date_col=first_date_col,
+            total_row=total_row,
+        )
+        logger.info(
+            "Sales spreadsheet: wrote %s by ASIN for marketplace=%s sheet_id=%s total=%d",
+            date_str,
+            marketplace_name,
+            combined_sheet_id,
+            total,
+        )
+        return bool(quantities_by_asin)
 
     tv_total = _write_sales_tab_by_asin(
         token,

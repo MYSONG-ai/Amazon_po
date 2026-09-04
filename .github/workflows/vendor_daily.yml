@@ -30,8 +30,12 @@ jobs:
           SP_MARKETPLACE: IT
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
-          SALES_SPREADSHEET_TOKEN: QYxXsLaONhieXJttq0EcTQXrnlb
-          SALES_TV_SHEET_ID: 9b88d3
-          SALES_MONITOR_SHEET_ID: ZwTzBK
+          SALES_SPREADSHEET_TOKEN: DLJMs1Q2Pht7xmtPxmPcmKhCnjd
+          SALES_SHEET_ID: ayaBCL
+          SALES_HEADER_ROW: '2'
+          SALES_DATA_START_ROW: '3'
+          SALES_ASIN_COLUMN: '4'
+          SALES_FIRST_DATE_COLUMN: '9'
+          SALES_TOTAL_ROW: '0'
           FEISHU_VENDOR_CHAT_ID: ${{ secrets.FEISHU_VENDOR_CHAT_ID }}
         run: python vendor_report.py
