@@ -29,16 +29,10 @@ jobs:
 
           SP_LWA_APP_ID: ${{ secrets.SP_LWA_APP_ID }}
           SP_LWA_CLIENT_SECRET: ${{ secrets.SP_LWA_CLIENT_SECRET }}
-          SP_AWS_ACCESS_KEY: ${{ secrets.SP_AWS_ACCESS_KEY }}
-          SP_AWS_SECRET_KEY: ${{ secrets.SP_AWS_SECRET_KEY }}
-          SP_ROLE_ARN: ${{ secrets.SP_ROLE_ARN }}
 
           IT_ACCOUNT_LABEL: Italy Account
           IT_SP_MARKETPLACE: IT
           IT_SP_REFRESH_TOKEN: ${{ secrets.IT_SP_REFRESH_TOKEN }}
           IT_SP_LWA_APP_ID: ${{ secrets.IT_SP_LWA_APP_ID }}
           IT_SP_LWA_CLIENT_SECRET: ${{ secrets.IT_SP_LWA_CLIENT_SECRET }}
-          IT_SP_AWS_ACCESS_KEY: ${{ secrets.IT_SP_AWS_ACCESS_KEY }}
-          IT_SP_AWS_SECRET_KEY: ${{ secrets.IT_SP_AWS_SECRET_KEY }}
-          IT_SP_ROLE_ARN: ${{ secrets.IT_SP_ROLE_ARN }}
         run: python unconfirmed_po_monitor.py

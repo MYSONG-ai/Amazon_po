@@ -16,23 +16,11 @@ Required GitHub secrets:
 - `FEISHU_APP_SECRET`
 - `IT_SP_REFRESH_TOKEN`
 
-The script can reuse these shared SP-API secrets if this Italy account uses the
-same app/AWS role as the existing job:
-
-- `SP_LWA_APP_ID`
-- `SP_LWA_CLIENT_SECRET`
-- `SP_AWS_ACCESS_KEY`
-- `SP_AWS_SECRET_KEY`
-- `SP_ROLE_ARN`
-
-If this Italy account needs separate app/AWS credentials, add account-specific
-secrets instead:
+The script uses direct Vendor Orders requests with LWA credentials only. Add
+the account-specific app credentials:
 
 - `IT_SP_LWA_APP_ID`
 - `IT_SP_LWA_CLIENT_SECRET`
-- `IT_SP_AWS_ACCESS_KEY`
-- `IT_SP_AWS_SECRET_KEY`
-- `IT_SP_ROLE_ARN`
 
 Unconfirmed states default to:
 

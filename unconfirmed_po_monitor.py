@@ -13,12 +13,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sp_api.api import VendorOrders
-from sp_api.base import SellingApiException
+import requests
 
 from vendor_report import (
     CST,
-    MARKETPLACE_MAP,
     load_asin_names,
     money_amount,
     money_currency,
@@ -48,10 +46,17 @@ EUR_TO_RMB_RATE = float(os.environ.get("EUR_TO_RMB_RATE", "7.8"))
 COMMON_SP_ENV = (
     "SP_LWA_APP_ID",
     "SP_LWA_CLIENT_SECRET",
-    "SP_AWS_ACCESS_KEY",
-    "SP_AWS_SECRET_KEY",
-    "SP_ROLE_ARN",
 )
+
+MARKETPLACE_IDS = {
+    "DE": "A1PA6795UKAE89",
+    "IT": "APJ6JRA9NG5V4",
+    "FR": "A13V1IB3VIYZZH",
+    "ES": "A1RKKUPIHCS9HS",
+    "UK": "A1F83G8C2ARO7P",
+}
+SP_API_BASE = "https://sellingpartnerapi-eu.amazon.com"
+LWA_TOKEN_URL = "https://api.amazon.com/auth/o2/token"
 
 
 @dataclass
@@ -98,7 +103,7 @@ def load_account(slot: str) -> AccountConfig | None:
         return None
 
     marketplace_code = os.environ.get(f"{slot}_SP_MARKETPLACE", "IT").upper()
-    if marketplace_code not in MARKETPLACE_MAP:
+    if marketplace_code not in MARKETPLACE_IDS:
         logger.warning("%s skipped: unsupported marketplace %s", slot, marketplace_code)
         return None
 
@@ -110,9 +115,6 @@ def load_account(slot: str) -> AccountConfig | None:
             "lwa_app_id": _env_value(slot, "SP_LWA_APP_ID"),
             "lwa_client_secret": _env_value(slot, "SP_LWA_CLIENT_SECRET"),
             "refresh_token": refresh_token,
-            "aws_access_key": _env_value(slot, "SP_AWS_ACCESS_KEY"),
-            "aws_secret_key": _env_value(slot, "SP_AWS_SECRET_KEY"),
-            "role_arn": _env_value(slot, "SP_ROLE_ARN"),
         },
     )
 
@@ -269,37 +271,71 @@ def summarize_po(order: dict[str, Any], account: AccountConfig) -> dict[str, Any
 
 
 def fetch_unconfirmed_pos(account: AccountConfig) -> list[dict[str, Any]]:
-    marketplace = MARKETPLACE_MAP[account.marketplace_code]
-    api = VendorOrders(credentials=account.credentials, marketplace=marketplace)
-
     logger.info(
         "Checking %s (%s): all unconfirmed purchase orders",
         account.label,
         account.marketplace_code,
     )
 
+    token_response = requests.post(
+        LWA_TOKEN_URL,
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": account.credentials["refresh_token"],
+            "client_id": account.credentials["lwa_app_id"],
+            "client_secret": account.credentials["lwa_client_secret"],
+        },
+        timeout=30,
+    )
+    if not token_response.ok:
+        raise RuntimeError(
+            f"{account.label} LWA token request failed: "
+            f"HTTP {token_response.status_code} {token_response.text[:500]}"
+        )
+    token_payload = token_response.json()
+    access_token = token_payload.get("access_token")
+    if not access_token:
+        raise RuntimeError(f"{account.label} LWA response did not contain access_token")
+
+    marketplace_id = MARKETPLACE_IDS[account.marketplace_code]
     rows: list[dict[str, Any]] = []
     next_token = None
     while True:
-        kwargs: dict[str, Any] = {
+        params: dict[str, Any] = {
+            "MarketplaceId": marketplace_id,
             "purchaseOrderState": "New",
             "sortOrder": "DESC",
             "limit": 100,
         }
         if next_token:
-            kwargs = {"nextToken": next_token}
+            params = {"nextToken": next_token}
 
-        try:
-            resp = api.get_purchase_orders(**kwargs)
-        except SellingApiException as exc:
-            raise RuntimeError(f"{account.label} PO fetch failed: {exc}") from exc
+        response = requests.get(
+            f"{SP_API_BASE}/vendor/orders/v1/purchaseOrders",
+            params=params,
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "Amazon-po-monitor/1.0",
+                "x-amz-access-token": access_token,
+            },
+            timeout=30,
+        )
+        if not response.ok:
+            raise RuntimeError(
+                f"{account.label} PO fetch failed: "
+                f"HTTP {response.status_code} {response.text[:500]}"
+            )
 
-        for order in resp.payload.get("orders", []) or []:
+        body = response.json()
+        payload = body.get("payload") or body
+
+        for order in payload.get("orders", []) or []:
             state = str(order.get("purchaseOrderState", "")).upper()
             if state in UNCONFIRMED_STATES:
                 rows.append(summarize_po(order, account))
 
-        next_token = getattr(resp, "next_token", None)
+        pagination = payload.get("pagination") or body.get("pagination") or {}
+        next_token = pagination.get("nextToken") or body.get("nextToken")
         if not next_token:
             break
 
