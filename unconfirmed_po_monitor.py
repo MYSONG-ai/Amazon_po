@@ -217,6 +217,57 @@ def _ship_window(order: dict[str, Any], details: dict[str, Any]) -> Any:
     )
 
 
+def _warehouse_label(order: dict[str, Any], details: dict[str, Any]) -> str:
+    """Extract a compact receiving-warehouse label from the PO payload."""
+    candidates = (
+        details.get("shipToParty"),
+        order.get("shipToParty"),
+        details.get("shipToLocation"),
+        order.get("shipToLocation"),
+        details.get("warehouse"),
+        order.get("warehouse"),
+    )
+    for candidate in candidates:
+        if not candidate:
+            continue
+        if isinstance(candidate, str):
+            return candidate.strip()
+        if not isinstance(candidate, dict):
+            continue
+
+        identifier = next(
+            (
+                str(candidate.get(key) or "").strip()
+                for key in ("partyId", "warehouseCode", "locationCode", "code", "id")
+                if candidate.get(key)
+            ),
+            "",
+        )
+        name = next(
+            (
+                str(candidate.get(key) or "").strip()
+                for key in ("name", "warehouseName", "locationName", "displayName")
+                if candidate.get(key)
+            ),
+            "",
+        )
+        address = candidate.get("address") or candidate.get("shipToAddress") or {}
+        city = ""
+        if isinstance(address, dict):
+            city = str(
+                address.get("city")
+                or address.get("cityName")
+                or address.get("stateOrRegion")
+                or ""
+            ).strip()
+
+        parts = [part for part in (identifier, name, city) if part]
+        if parts:
+            return " / ".join(dict.fromkeys(parts))
+
+    return "未知"
+
+
 def _item_product_id(item: dict[str, Any]) -> str:
     return str(
         item.get("amazonProductIdentifier")
@@ -262,6 +313,7 @@ def summarize_po(order: dict[str, Any], account: AccountConfig) -> dict[str, Any
         "status": order.get("purchaseOrderState", ""),
         "po_date": str(details.get("purchaseOrderDate", ""))[:10],
         "ship_window": _ship_window(order, details),
+        "warehouse": _warehouse_label(order, details),
         "sku_count": len(items),
         "total_qty": total_qty,
         "total_net": round(total_net, 2),
@@ -374,7 +426,7 @@ def build_message(rows: list[dict[str, Any]], asin_names: dict[str, str] | None 
             ship = _format_ship_window(row.get("ship_window"))
             lines.append(
                 f"{index}. {row['po_number']} | "
-                f"{ship or '-'} | 金额 {amount}"
+                f"{ship or '-'} | 仓库 {row.get('warehouse') or '未知'} | 金额 {amount}"
             )
             for item in row.get("items", []) or []:
                 label = (
